@@ -39,7 +39,10 @@ type Batch[ItemType any] struct {
 }
 
 type BatchOperation[ItemType any] struct {
-	item       ItemType
+	// either `item` or `items` is used
+	item  ItemType
+	items []ItemType
+
 	resultChan chan error
 }
 
@@ -49,7 +52,7 @@ type BatchResult struct {
 }
 
 func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
-	batch := &Batch[ItemType]{
+	b := &Batch[ItemType]{
 		inputChan:  make(chan BatchOperation[ItemType]),
 		outputChan: make(chan BatchResult),
 		resultsPool: sync.Pool{
@@ -60,13 +63,13 @@ func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 		options: options.withDefaults(),
 	}
 
-	batch.writerWg.Add(1)
-	go batch.writer()
+	b.writerWg.Add(1)
+	go b.writer()
 
-	batch.responderWg.Add(1)
-	go batch.responder()
+	b.responderWg.Add(1)
+	go b.responder()
 
-	return batch
+	return b
 }
 
 func (b *Batch[ItemType]) writer() {
@@ -82,12 +85,16 @@ func (b *Batch[ItemType]) writer() {
 		var done bool
 		var flush bool
 		select {
-		case op, live := <-b.inputChan:
-			if !live {
+		case op, ok := <-b.inputChan:
+			if !ok {
 				done = true
 				flush = len(items) > 0
 			} else {
-				items = append(items, op.item)
+				if items != nil {
+					items = append(items, op.items...)
+				} else {
+					items = append(items, op.item)
+				}
 				results = append(results, op.resultChan)
 			}
 		case <-ticker.C:
@@ -130,9 +137,20 @@ func (b *Batch[ItemType]) Add(item ItemType) error {
 	return err
 }
 
+func (b *Batch[ItemType]) AddMany(items []ItemType) error {
+	op := BatchOperation[ItemType]{
+		items:      items,
+		resultChan: make(chan error),
+	}
+	b.inputChan <- op
+	err := <-op.resultChan
+	return err
+}
+
 func (b *Batch[ItemType]) Close() {
 	close(b.inputChan)
 	close(b.outputChan)
+
 	b.writerWg.Wait()
 	b.responderWg.Wait()
 }
