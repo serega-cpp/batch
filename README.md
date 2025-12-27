@@ -1,5 +1,6 @@
-Batch
-=====
+[![Go Report Card](https://goreportcard.com/badge/github.com/serega-cpp/batch)](https://goreportcard.com/report/github.com/serega-cpp/batch)
+
+### Batch
 
 This package is designed for servers that want to process incoming requests in batches rather than individually. A typical example is adding records to a database.
 
@@ -19,7 +20,7 @@ import "github.com/serega-cpp/batch"
 const (
 	BatchTimeout      = 100 * time.Millisecond
 	DatabaseBatchSize = 10
-  DatabaseConnCount = 4
+	DatabaseConnCount = 4
 )
 
 // Initialization
