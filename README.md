@@ -1,4 +1,5 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/serega-cpp/batch)](https://goreportcard.com/report/github.com/serega-cpp/batch)
+[![codecov](https://codecov.io/gh/serega-cpp/batch/branch/master/graph/badge.svg)](https://codecov.io/gh/serega-cpp/batch)
 
 ### Batch
 
@@ -23,23 +24,25 @@ const (
 	DatabaseConnCount = 4
 )
 
+type Record struct {}
+
 // Initialization
-batchOptions := batch.Options[database.Item]{
+batchOptions := batch.Options[Record]{
   MaxLifetime:  BatchTimeout,      // default 100ms
   MaxSize:      DatabaseBatchSize, // default 1000
   FlushThreads: DatabaseConnCount, // default 1
-  FlushFunc:    func(items []database.Item) error {
-    return db.InsertBatch(items)
+  FlushFunc:    func(thread int, records []Record) error {
+    return db.InsertBatch(records)
   },
 }
 
-itemsBatch := batch.New[database.Item](batchOptions)
+b := batch.New[Record](batchOptions)
 
 // In request handler
-err := itemsBatch.AddOne(item)
+err := b.AddOne(record)
 
 // On exit
-itemsBatch.Close()
+b.Close()
 ```
 
 #### Installation

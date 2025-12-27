@@ -11,6 +11,16 @@ import (
 )
 
 func TestBatch(t *testing.T) {
+	t.Run("Options", func(t *testing.T) {
+		var options batch.Options[int]
+
+		b := batch.New(options)
+		defer b.Close()
+
+		err := b.AddOne(0)
+		require.NoError(t, err)
+	})
+
 	t.Run("AddOne", func(t *testing.T) {
 		item := "test1"
 		results := make(chan string, 1+1)
