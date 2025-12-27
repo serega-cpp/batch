@@ -17,15 +17,17 @@ The main disadvantages of this solution include:
 import "github.com/serega-cpp/batch"
 
 const (
-	BatchSize    = 10
-	BatchTimeout = 100 * time.Millisecond
+	BatchTimeout      = 100 * time.Millisecond
+	DatabaseBatchSize = 10
+  DatabaseConnCount = 4
 )
 
 // Initialization
 batchOptions := batch.Options[database.Item]{
-  MaxSize:     BatchSize,      // default 1000
-  MaxLifetime: BatchTimeout,   // default 100ms
-  FlushFunc:   func(items []database.Item) error {
+  MaxLifetime:  BatchTimeout,      // default 100ms
+  MaxSize:      DatabaseBatchSize, // default 1000
+  FlushThreads: DatabaseConnCount, // default 1
+  FlushFunc:    func(items []database.Item) error {
     return db.InsertBatch(items)
   },
 }
@@ -33,7 +35,7 @@ batchOptions := batch.Options[database.Item]{
 itemsBatch := batch.New[database.Item](batchOptions)
 
 // In request handler
-err := itemsBatch.Add(item)
+err := itemsBatch.AddOne(item)
 
 // On exit
 itemsBatch.Close()

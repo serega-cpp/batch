@@ -5,22 +5,34 @@ import (
 	"time"
 )
 
-type Options[ItemType any] struct {
-	MaxSize     int
-	MaxLifetime time.Duration
+/******************************************************************************
+*  Architecture of package (processing request stages):
+*  - create the operation for incoming request
+*  - send it via 'to_collector' channel to collector
+*  - collector() routine collects operations into the batch
+*  - when the batch is ready send it via 'to_writer' channel to writer
+*  - writer() routine calls the flash routine for the batch and returns results
+******************************************************************************/
 
-	FlushFunc func(items []ItemType) error
+type Options[ItemType any] struct {
+	MaxLifetime  time.Duration
+	MaxSize      int
+	FlushThreads int
+	FlushFunc    func(thread int, items []ItemType) error
 }
 
 func (o Options[ItemType]) withDefaults() Options[ItemType] {
-	if o.MaxSize == 0 {
-		o.MaxSize = 1000
-	}
 	if o.MaxLifetime == 0 {
 		o.MaxLifetime = 100 * time.Millisecond
 	}
+	if o.MaxSize == 0 {
+		o.MaxSize = 1000
+	}
+	if o.FlushThreads == 0 {
+		o.FlushThreads = 1
+	}
 	if o.FlushFunc == nil {
-		o.FlushFunc = func([]ItemType) error {
+		o.FlushFunc = func(int, []ItemType) error {
 			return nil
 		}
 	}
@@ -28,55 +40,78 @@ func (o Options[ItemType]) withDefaults() Options[ItemType] {
 }
 
 type Batch[ItemType any] struct {
-	inputChan chan BatchOperation[ItemType]
-	writerWg  sync.WaitGroup
+	toCollectorChan chan *Operation[ItemType]
+	collectorWg     sync.WaitGroup
 
-	outputChan  chan BatchResult
-	responderWg sync.WaitGroup
-	resultsPool sync.Pool
+	toWriterChan chan *OperationsBatch[ItemType]
+	writerWg     sync.WaitGroup
+
+	operationsBatchPool sync.Pool
 
 	options Options[ItemType]
 }
 
-type BatchOperation[ItemType any] struct {
-	// either `item` or `items` is used
-	item  ItemType
-	items []ItemType
+type Operation[ItemType any] struct {
+	item  ItemType   // either `item` or
+	items []ItemType // `items` is used
 
-	resultChan chan error
+	result chan error
 }
 
-type BatchResult struct {
-	err      error
-	channels []chan error
+type OperationsBatch[ItemType any] struct {
+	items   []ItemType
+	results []chan error
+}
+
+func NewOperationsBatch[ItemType any](size int) *OperationsBatch[ItemType] {
+	return &OperationsBatch[ItemType]{
+		items:   make([]ItemType, 0, size),
+		results: make([]chan error, 0, size),
+	}
+}
+
+func (ob *OperationsBatch[ItemType]) Reset() *OperationsBatch[ItemType] {
+	ob.items = ob.items[:0]
+	ob.results = ob.results[:0]
+	return ob
+}
+
+func (ob *OperationsBatch[ItemType]) Append(op *Operation[ItemType]) {
+	if op.items == nil {
+		ob.items = append(ob.items, op.item)
+		ob.results = append(ob.results, op.result)
+	} else {
+		ob.items = append(ob.items, op.items...)
+		ob.results = append(ob.results, op.result)
+	}
 }
 
 func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 	b := &Batch[ItemType]{
-		inputChan:  make(chan BatchOperation[ItemType]),
-		outputChan: make(chan BatchResult),
-		resultsPool: sync.Pool{
-			New: func() any {
-				return make([]chan error, 0, options.MaxSize)
-			},
-		},
-		options: options.withDefaults(),
+		toCollectorChan: make(chan *Operation[ItemType]),
+		toWriterChan:    make(chan *OperationsBatch[ItemType]),
+		options:         options.withDefaults(),
 	}
 
-	b.writerWg.Add(1)
-	go b.writer()
+	b.operationsBatchPool.New = func() any {
+		return NewOperationsBatch[ItemType](b.options.MaxSize)
+	}
 
-	b.responderWg.Add(1)
-	go b.responder()
+	b.collectorWg.Add(1)
+	go b.collector()
+
+	for i := 0; i < b.options.FlushThreads; i++ {
+		b.writerWg.Add(1)
+		go b.writer(i)
+	}
 
 	return b
 }
 
-func (b *Batch[ItemType]) writer() {
-	defer b.writerWg.Done()
+func (b *Batch[ItemType]) collector() {
+	defer b.collectorWg.Done()
 
-	items := make([]ItemType, 0, b.options.MaxSize)
-	results := b.resultsPool.Get().([]chan error)
+	ob := b.operationsBatchPool.Get().(*OperationsBatch[ItemType])
 
 	ticker := time.NewTicker(b.options.MaxLifetime)
 	defer ticker.Stop()
@@ -85,29 +120,27 @@ func (b *Batch[ItemType]) writer() {
 		var done bool
 		var flush bool
 		select {
-		case op, ok := <-b.inputChan:
+		case op, ok := <-b.toCollectorChan:
 			if !ok {
+				flush = len(ob.items) > 0
 				done = true
-				flush = len(items) > 0
+			} else if op.items == nil || len(ob.items)+len(op.items) <= b.options.MaxSize {
+				ob.Append(op)
+			} else if len(ob.items) > len(op.items) {
+				b.toWriterChan <- ob
+				ob = b.operationsBatchPool.Get().(*OperationsBatch[ItemType])
+				ob.Append(op)
 			} else {
-				if items != nil {
-					items = append(items, op.items...)
-				} else {
-					items = append(items, op.item)
-				}
-				results = append(results, op.resultChan)
+				tmp := b.operationsBatchPool.Get().(*OperationsBatch[ItemType])
+				tmp.Append(op)
+				b.toWriterChan <- tmp
 			}
 		case <-ticker.C:
-			flush = len(items) > 0
+			flush = len(ob.items) > 0
 		}
-		if flush || len(items) >= b.options.MaxSize {
-			err := b.options.FlushFunc(items)
-			b.outputChan <- BatchResult{
-				err:      err,
-				channels: results,
-			}
-			items = items[:0]
-			results = b.resultsPool.Get().([]chan error)
+		if flush || len(ob.items) >= b.options.MaxSize {
+			b.toWriterChan <- ob
+			ob = b.operationsBatchPool.Get().(*OperationsBatch[ItemType])
 		}
 		if done {
 			break
@@ -115,42 +148,43 @@ func (b *Batch[ItemType]) writer() {
 	}
 }
 
-func (b *Batch[ItemType]) responder() {
-	defer b.responderWg.Done()
+func (b *Batch[ItemType]) writer(thread int) {
+	defer b.writerWg.Done()
 
-	for result := range b.outputChan {
-		for _, ch := range result.channels {
-			ch <- result.err
+	for ob := range b.toWriterChan {
+		err := b.options.FlushFunc(thread, ob.items)
+		for _, ch := range ob.results {
+			ch <- err
 			close(ch)
 		}
-		b.resultsPool.Put(result.channels[:0])
+		b.operationsBatchPool.Put(ob.Reset())
 	}
 }
 
-func (b *Batch[ItemType]) Add(item ItemType) error {
-	op := BatchOperation[ItemType]{
-		item:       item,
-		resultChan: make(chan error),
+func (b *Batch[ItemType]) AddOne(item ItemType) error {
+	op := &Operation[ItemType]{
+		item:   item,
+		result: make(chan error),
 	}
-	b.inputChan <- op
-	err := <-op.resultChan
+	b.toCollectorChan <- op
+	err := <-op.result
 	return err
 }
 
 func (b *Batch[ItemType]) AddMany(items []ItemType) error {
-	op := BatchOperation[ItemType]{
-		items:      items,
-		resultChan: make(chan error),
+	op := &Operation[ItemType]{
+		items:  items,
+		result: make(chan error),
 	}
-	b.inputChan <- op
-	err := <-op.resultChan
+	b.toCollectorChan <- op
+	err := <-op.result
 	return err
 }
 
 func (b *Batch[ItemType]) Close() {
-	close(b.inputChan)
-	close(b.outputChan)
+	close(b.toCollectorChan)
+	b.collectorWg.Wait()
 
+	close(b.toWriterChan)
 	b.writerWg.Wait()
-	b.responderWg.Wait()
 }
