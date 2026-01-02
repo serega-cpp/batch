@@ -1,6 +1,7 @@
 package batch_test
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,37 @@ func TestBatch(t *testing.T) {
 
 		err := bat.AddOne(empty{})
 		require.NoError(t, err)
+	})
+
+	t.Run("Metrics", func(t *testing.T) {
+		threadsCount := 4
+		options := batch.Options[string]{
+			MaxSize:      threadsCount,
+			FlushThreads: threadsCount,
+		}
+
+		bat := batch.New(options)
+		defer bat.Close()
+
+		items := []string{"test1", "test2", "test3", "test4"}
+
+		var wg sync.WaitGroup
+		for range threadsCount {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := bat.AddMany(items)
+				require.NoError(t, err)
+			}()
+		}
+		wg.Wait()
+
+		metrics := bat.Metrics()
+		var expectedItems int64 = int64(threadsCount * len(items))
+		require.Equal(t, expectedItems, metrics.ItemsReceived)
+		require.Equal(t, expectedItems, metrics.ItemsCompleted)
+		require.Equal(t, threadsCount, len(metrics.Flushes))
+		require.Equal(t, int64(threadsCount), metrics.FlushesTotal())
 	})
 
 	t.Run("AddOne", func(t *testing.T) {

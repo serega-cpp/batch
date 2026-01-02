@@ -2,6 +2,7 @@ package batch
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,6 +49,7 @@ type Batch[ItemType any] struct {
 
 	operationsBatchPool sync.Pool
 
+	metrics Metrics
 	options Options[ItemType]
 }
 
@@ -85,10 +87,10 @@ func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 		toWriterChan:    make(chan *OperationsBatch[ItemType]),
 		options:         options.withDefaults(),
 	}
-
 	b.operationsBatchPool.New = func() any {
 		return NewOperationsBatch[ItemType](b.options.MaxSize)
 	}
+	b.metrics = NewMetrics(b.options.FlushThreads)
 
 	b.collectorWg.Add(1)
 	go b.collector()
@@ -146,6 +148,7 @@ func (b *Batch[ItemType]) writer(thread int) {
 
 	for ob := range b.toWriterChan {
 		err := b.options.FlushFunc(thread, ob.items)
+		atomic.AddInt64(&b.metrics.Flushes[thread], 1)
 		for _, ch := range ob.results {
 			ch <- err
 			close(ch)
@@ -163,9 +166,25 @@ func (b *Batch[ItemType]) AddMany(items []ItemType) error {
 		items:  items,
 		result: make(chan error),
 	}
+
+	atomic.AddInt64(&b.metrics.ItemsReceived, int64(len(items)))
+	defer atomic.AddInt64(&b.metrics.ItemsCompleted, int64(len(items)))
+
 	b.toCollectorChan <- op
 	err := <-op.result
 	return err
+}
+
+func (b *Batch[ItemType]) Metrics() Metrics {
+	flushes := make([]int64, len(b.metrics.Flushes))
+	for i := range flushes {
+		flushes[i] = atomic.LoadInt64(&b.metrics.Flushes[i])
+	}
+	return Metrics{
+		ItemsReceived:  atomic.LoadInt64(&b.metrics.ItemsReceived),
+		ItemsCompleted: atomic.LoadInt64(&b.metrics.ItemsCompleted),
+		Flushes:        flushes,
+	}
 }
 
 func (b *Batch[ItemType]) Close() {
