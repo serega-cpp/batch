@@ -15,9 +15,9 @@ import (
 ******************************************************************************/
 
 type Options[ItemType any] struct {
-	MaxLifetime  time.Duration
-	MaxSize      int
-	FlushThreads int
+	MaxLifetime  time.Duration // default 100ms
+	MaxSize      int           // default 1000
+	FlushThreads int           // default 1
 	FlushFunc    func(thread int, items []ItemType) error
 }
 
@@ -52,9 +52,7 @@ type Batch[ItemType any] struct {
 }
 
 type Operation[ItemType any] struct {
-	item  ItemType   // either `item` or
-	items []ItemType // `items` is used
-
+	items  []ItemType
 	result chan error
 }
 
@@ -77,13 +75,8 @@ func (ob *OperationsBatch[ItemType]) Reset() *OperationsBatch[ItemType] {
 }
 
 func (ob *OperationsBatch[ItemType]) Append(op *Operation[ItemType]) {
-	if op.items == nil {
-		ob.items = append(ob.items, op.item)
-		ob.results = append(ob.results, op.result)
-	} else {
-		ob.items = append(ob.items, op.items...)
-		ob.results = append(ob.results, op.result)
-	}
+	ob.items = append(ob.items, op.items...)
+	ob.results = append(ob.results, op.result)
 }
 
 func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
@@ -124,7 +117,7 @@ func (b *Batch[ItemType]) collector() {
 			if !ok {
 				flush = len(ob.items) > 0
 				done = true
-			} else if op.items == nil || len(ob.items)+len(op.items) <= b.options.MaxSize {
+			} else if len(ob.items)+len(op.items) <= b.options.MaxSize {
 				ob.Append(op)
 			} else if len(ob.items) > len(op.items) {
 				b.toWriterChan <- ob
@@ -162,13 +155,7 @@ func (b *Batch[ItemType]) writer(thread int) {
 }
 
 func (b *Batch[ItemType]) AddOne(item ItemType) error {
-	op := &Operation[ItemType]{
-		item:   item,
-		result: make(chan error),
-	}
-	b.toCollectorChan <- op
-	err := <-op.result
-	return err
+	return b.AddMany([]ItemType{item})
 }
 
 func (b *Batch[ItemType]) AddMany(items []ItemType) error {
