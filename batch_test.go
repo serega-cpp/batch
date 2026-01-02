@@ -12,12 +12,12 @@ import (
 
 func TestBatch(t *testing.T) {
 	t.Run("Options", func(t *testing.T) {
-		var options batch.Options[int]
+		var options batch.Options[empty]
 
-		b := batch.New(options)
-		defer b.Close()
+		bat := batch.New(options)
+		defer bat.Close()
 
-		err := b.AddOne(0)
+		err := bat.AddOne(empty{})
 		require.NoError(t, err)
 	})
 
@@ -33,10 +33,10 @@ func TestBatch(t *testing.T) {
 			},
 		}
 
-		b := batch.New(options)
-		defer b.Close()
+		bat := batch.New(options)
+		defer bat.Close()
 
-		err := b.AddOne(item)
+		err := bat.AddOne(item)
 		require.NoError(t, err)
 
 		result := <-results
@@ -57,10 +57,10 @@ func TestBatch(t *testing.T) {
 			},
 		}
 
-		b := batch.New(options)
-		defer b.Close()
+		bat := batch.New(options)
+		defer bat.Close()
 
-		err := b.AddMany(items)
+		err := bat.AddMany(items)
 		require.NoError(t, err)
 
 		for i := range items {
@@ -85,10 +85,10 @@ func TestBatch(t *testing.T) {
 			},
 		}
 
-		b := batch.New(options)
-		defer b.Close()
+		bat := batch.New(options)
+		defer bat.Close()
 
-		err := b.AddMany(items)
+		err := bat.AddMany(items)
 		require.NoError(t, err)
 
 		for i := range items {
@@ -115,16 +115,16 @@ func TestBatch(t *testing.T) {
 			},
 		}
 
-		b := batch.New(options)
-		defer b.Close()
+		bat := batch.New(options)
+		defer bat.Close()
 
 		go func() {
-			err := b.AddMany(items1)
+			err := bat.AddMany(items1)
 			require.NoError(t, err)
 		}()
 		time.Sleep(100 * time.Millisecond)
 		go func() {
-			err := b.AddMany(items2)
+			err := bat.AddMany(items2)
 			require.NoError(t, err)
 		}()
 
@@ -156,16 +156,16 @@ func TestBatch(t *testing.T) {
 			},
 		}
 
-		b := batch.New(options)
-		defer b.Close()
+		bat := batch.New(options)
+		defer bat.Close()
 
 		go func() {
-			err := b.AddMany(items1)
+			err := bat.AddMany(items1)
 			require.NoError(t, err)
 		}()
 		time.Sleep(100 * time.Millisecond)
 		go func() {
-			err := b.AddMany(items2)
+			err := bat.AddMany(items2)
 			require.NoError(t, err)
 		}()
 
@@ -179,3 +179,5 @@ func TestBatch(t *testing.T) {
 		}
 	})
 }
+
+type empty struct{}
