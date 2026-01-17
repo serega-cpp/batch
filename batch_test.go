@@ -12,34 +12,33 @@ import (
 )
 
 func TestBatch(t *testing.T) {
-	t.Run("Options", func(t *testing.T) {
+	t.Run("Default options", func(t *testing.T) {
 		var options batch.Options[empty]
 
 		bat := batch.New(options)
 		defer bat.Close()
 
-		err := bat.AddOne(empty{})
+		err := bat.Put(empty{})
 		require.NoError(t, err)
 	})
 
 	t.Run("Metrics", func(t *testing.T) {
 		threadsCount := 4
+		items := []string{"test1", "test2", "test3", "test4"}
 		options := batch.Options[string]{
-			MaxSize:      threadsCount,
+			MaxSize:      len(items),
 			FlushThreads: threadsCount,
 		}
 
 		bat := batch.New(options)
 		defer bat.Close()
 
-		items := []string{"test1", "test2", "test3", "test4"}
-
 		var wg sync.WaitGroup
 		for range threadsCount {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				err := bat.AddMany(items)
+				err := bat.Puts(items)
 				require.NoError(t, err)
 			}()
 		}
@@ -47,13 +46,23 @@ func TestBatch(t *testing.T) {
 
 		metrics := bat.Metrics()
 		var expectedItems int64 = int64(threadsCount * len(items))
-		require.Equal(t, expectedItems, metrics.ItemsReceived)
-		require.Equal(t, expectedItems, metrics.ItemsCompleted)
-		require.Equal(t, threadsCount, len(metrics.Flushes))
-		require.Equal(t, int64(threadsCount), metrics.FlushesTotal())
+		require.Equal(t, expectedItems, metrics.IncomingCount)
+		require.Equal(t, expectedItems, metrics.ServedCount)
+		require.Equal(t, threadsCount, len(metrics.FlushesPerThreadCount))
+		require.Equal(t, int64(threadsCount), metrics.FlushesCount)
 	})
 
-	t.Run("AddOne", func(t *testing.T) {
+	t.Run("Puts empty", func(t *testing.T) {
+		var options batch.Options[empty]
+
+		bat := batch.New(options)
+		defer bat.Close()
+
+		err := bat.Puts([]empty{})
+		require.NoError(t, err)
+	})
+
+	t.Run("Put", func(t *testing.T) {
 		item := "test1"
 		results := make(chan string, 1+1)
 
@@ -68,14 +77,11 @@ func TestBatch(t *testing.T) {
 		bat := batch.New(options)
 		defer bat.Close()
 
-		err := bat.AddOne(item)
+		err := bat.Put(item)
 		require.NoError(t, err)
-
-		result := <-results
-		require.Equal(t, item, result)
 	})
 
-	t.Run("AddMany", func(t *testing.T) {
+	t.Run("Puts", func(t *testing.T) {
 		items := []string{"test1", "test2", "test3", "test4"}
 		results := make(chan string, len(items)+1)
 
@@ -92,7 +98,7 @@ func TestBatch(t *testing.T) {
 		bat := batch.New(options)
 		defer bat.Close()
 
-		err := bat.AddMany(items)
+		err := bat.Puts(items)
 		require.NoError(t, err)
 
 		for i := range items {
@@ -101,7 +107,7 @@ func TestBatch(t *testing.T) {
 		}
 	})
 
-	t.Run("AddMany flush by size", func(t *testing.T) {
+	t.Run("Puts flush by size", func(t *testing.T) {
 		batchSize := 4
 		items := []string{"test1", "test2", "test3", "test4"}
 		results := make(chan string, len(items)+1)
@@ -120,7 +126,7 @@ func TestBatch(t *testing.T) {
 		bat := batch.New(options)
 		defer bat.Close()
 
-		err := bat.AddMany(items)
+		err := bat.Puts(items)
 		require.NoError(t, err)
 
 		for i := range items {
@@ -130,6 +136,8 @@ func TestBatch(t *testing.T) {
 	})
 
 	t.Run("Batch overflow case one", func(t *testing.T) {
+		// expecting that on overflow we flush the latest
+		// incoming items insted of the items from the buffer
 		batchSize := 6
 		items1 := []string{"test1", "test2", "test3"}
 		items2 := []string{"test4", "test5", "test6", "test7"}
@@ -151,12 +159,12 @@ func TestBatch(t *testing.T) {
 		defer bat.Close()
 
 		go func() {
-			err := bat.AddMany(items1)
+			err := bat.Puts(items1)
 			require.NoError(t, err)
 		}()
 		time.Sleep(100 * time.Millisecond)
 		go func() {
-			err := bat.AddMany(items2)
+			err := bat.Puts(items2)
 			require.NoError(t, err)
 		}()
 
@@ -171,6 +179,8 @@ func TestBatch(t *testing.T) {
 	})
 
 	t.Run("Batch overflow case two", func(t *testing.T) {
+		// expecting that on overflow we flush the buffer
+		// and put the latest incoming items into it
 		batchSize := 6
 		items1 := []string{"test1", "test2", "test3", "test4"}
 		items2 := []string{"test5", "test6", "test7"}
@@ -192,12 +202,12 @@ func TestBatch(t *testing.T) {
 		defer bat.Close()
 
 		go func() {
-			err := bat.AddMany(items1)
+			err := bat.Puts(items1)
 			require.NoError(t, err)
 		}()
 		time.Sleep(100 * time.Millisecond)
 		go func() {
-			err := bat.AddMany(items2)
+			err := bat.Puts(items2)
 			require.NoError(t, err)
 		}()
 

@@ -41,10 +41,10 @@ func (o Options[ItemType]) withDefaults() Options[ItemType] {
 }
 
 type Batch[ItemType any] struct {
-	toCollectorChan chan *Operation[ItemType]
+	toCollectorChan chan *operation[ItemType]
 	collectorWg     sync.WaitGroup
 
-	toWriterChan chan *OperationsBatch[ItemType]
+	toWriterChan chan *operationsBatch[ItemType]
 	writerWg     sync.WaitGroup
 
 	operationsBatchPool sync.Pool
@@ -53,44 +53,44 @@ type Batch[ItemType any] struct {
 	options Options[ItemType]
 }
 
-type Operation[ItemType any] struct {
+type operation[ItemType any] struct {
 	items  []ItemType
 	result chan error
 }
 
-type OperationsBatch[ItemType any] struct {
+type operationsBatch[ItemType any] struct {
 	items   []ItemType
 	results []chan error
 }
 
-func NewOperationsBatch[ItemType any](size int) *OperationsBatch[ItemType] {
-	return &OperationsBatch[ItemType]{
+func newOperationsBatch[ItemType any](size int) *operationsBatch[ItemType] {
+	return &operationsBatch[ItemType]{
 		items:   make([]ItemType, 0, size),
 		results: make([]chan error, 0, size),
 	}
 }
 
-func (ob *OperationsBatch[ItemType]) Reset() *OperationsBatch[ItemType] {
+func (ob *operationsBatch[ItemType]) reset() *operationsBatch[ItemType] {
 	ob.items = ob.items[:0]
 	ob.results = ob.results[:0]
 	return ob
 }
 
-func (ob *OperationsBatch[ItemType]) Append(op *Operation[ItemType]) {
+func (ob *operationsBatch[ItemType]) append(op *operation[ItemType]) {
 	ob.items = append(ob.items, op.items...)
 	ob.results = append(ob.results, op.result)
 }
 
 func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 	b := &Batch[ItemType]{
-		toCollectorChan: make(chan *Operation[ItemType]),
-		toWriterChan:    make(chan *OperationsBatch[ItemType]),
+		toCollectorChan: make(chan *operation[ItemType]),
+		toWriterChan:    make(chan *operationsBatch[ItemType]),
 		options:         options.withDefaults(),
 	}
 	b.operationsBatchPool.New = func() any {
-		return NewOperationsBatch[ItemType](b.options.MaxSize)
+		return newOperationsBatch[ItemType](b.options.MaxSize)
 	}
-	b.metrics = NewMetrics(b.options.FlushThreads)
+	b.metrics = newMetrics(b.options.FlushThreads)
 
 	b.collectorWg.Add(1)
 	go b.collector()
@@ -106,7 +106,7 @@ func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 func (b *Batch[ItemType]) collector() {
 	defer b.collectorWg.Done()
 
-	ob := b.operationsBatchPool.Get().(*OperationsBatch[ItemType])
+	ob := b.operationsBatchPool.Get().(*operationsBatch[ItemType])
 
 	ticker := time.NewTicker(b.options.MaxLifetime)
 	defer ticker.Stop()
@@ -120,14 +120,14 @@ func (b *Batch[ItemType]) collector() {
 				flush = len(ob.items) > 0
 				done = true
 			} else if len(ob.items)+len(op.items) <= b.options.MaxSize {
-				ob.Append(op)
+				ob.append(op)
 			} else if len(ob.items) > len(op.items) {
 				b.toWriterChan <- ob
-				ob = b.operationsBatchPool.Get().(*OperationsBatch[ItemType])
-				ob.Append(op)
+				ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
+				ob.append(op)
 			} else {
-				tmp := b.operationsBatchPool.Get().(*OperationsBatch[ItemType])
-				tmp.Append(op)
+				tmp := b.operationsBatchPool.Get().(*operationsBatch[ItemType])
+				tmp.append(op)
 				b.toWriterChan <- tmp
 			}
 		case <-ticker.C:
@@ -135,7 +135,7 @@ func (b *Batch[ItemType]) collector() {
 		}
 		if flush || len(ob.items) >= b.options.MaxSize {
 			b.toWriterChan <- ob
-			ob = b.operationsBatchPool.Get().(*OperationsBatch[ItemType])
+			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
 		}
 		if done {
 			break
@@ -148,27 +148,30 @@ func (b *Batch[ItemType]) writer(thread int) {
 
 	for ob := range b.toWriterChan {
 		err := b.options.FlushFunc(thread, ob.items)
-		atomic.AddInt64(&b.metrics.Flushes[thread], 1)
+		atomic.AddInt64(&b.metrics.FlushesPerThreadCount[thread], 1)
 		for _, ch := range ob.results {
 			ch <- err
 			close(ch)
 		}
-		b.operationsBatchPool.Put(ob.Reset())
+		b.operationsBatchPool.Put(ob.reset())
 	}
 }
 
-func (b *Batch[ItemType]) AddOne(item ItemType) error {
-	return b.AddMany([]ItemType{item})
+func (b *Batch[ItemType]) Put(item ItemType) error {
+	return b.Puts([]ItemType{item})
 }
 
-func (b *Batch[ItemType]) AddMany(items []ItemType) error {
-	op := &Operation[ItemType]{
+func (b *Batch[ItemType]) Puts(items []ItemType) error {
+	if len(items) == 0 {
+		return nil
+	}
+	op := &operation[ItemType]{
 		items:  items,
 		result: make(chan error),
 	}
 
-	atomic.AddInt64(&b.metrics.ItemsReceived, int64(len(items)))
-	defer atomic.AddInt64(&b.metrics.ItemsCompleted, int64(len(items)))
+	atomic.AddInt64(&b.metrics.IncomingCount, int64(len(items)))
+	defer atomic.AddInt64(&b.metrics.ServedCount, int64(len(items)))
 
 	b.toCollectorChan <- op
 	err := <-op.result
@@ -176,14 +179,17 @@ func (b *Batch[ItemType]) AddMany(items []ItemType) error {
 }
 
 func (b *Batch[ItemType]) Metrics() Metrics {
-	flushes := make([]int64, len(b.metrics.Flushes))
-	for i := range flushes {
-		flushes[i] = atomic.LoadInt64(&b.metrics.Flushes[i])
+	var flushesCount int64
+	flushesPerThreadCount := make([]int64, len(b.metrics.FlushesPerThreadCount))
+	for i := range flushesPerThreadCount {
+		flushesPerThreadCount[i] = atomic.LoadInt64(&b.metrics.FlushesPerThreadCount[i])
+		flushesCount += flushesPerThreadCount[i]
 	}
 	return Metrics{
-		ItemsReceived:  atomic.LoadInt64(&b.metrics.ItemsReceived),
-		ItemsCompleted: atomic.LoadInt64(&b.metrics.ItemsCompleted),
-		Flushes:        flushes,
+		IncomingCount:         atomic.LoadInt64(&b.metrics.IncomingCount),
+		ServedCount:           atomic.LoadInt64(&b.metrics.ServedCount),
+		FlushesCount:          flushesCount,
+		FlushesPerThreadCount: flushesPerThreadCount,
 	}
 }
 
