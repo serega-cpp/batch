@@ -5,15 +5,19 @@
 
 ### Batch
 
-This package is designed for servers that want to process incoming requests in batches rather than individually. A typical example is inserting records to a database.
+This package is designed for services that need to process incoming requests in batches rather than individually. A typical use case is inserting records into a database.
 
-The obvious solution is to buffer the record, return an OK response to the request, and then write the buffer to the database when the buffer is full (or a timeout occurs). However, this is unreliable solution. Another, more complex solution would be to return an asynchronous request identifier to the client, which can then be used later to retrieve the operation result. This solution, in addition to complicating the client code, doubles the server load and may not be suitable for highly load systems.
+A straightforward approach is to buffer incoming records, immediately return an OK response to the client, and write the buffer to the database once it is full (or when a timeout occurs). However, this approach is unreliable. A more robust, but significantly more complex solution, is to return an asynchronous request identifier to the client, which can later be used to retrieve the result of the operation. In addition to complicating client-side logic, this approach effectively doubles the server load and may not be suitable for high-load systems.
 
-The solution implemented in this package offers a different approach. In it, we hold incoming requests until the buffer is actually written to the database. This allows us directly return the result to the client.
+The solution implemented in this package takes a different approach. Incoming requests are blocked until the buffer is actually written to the database, allowing the service to return the final operation result directly to the client.
 
-The main disadvantages of this solution include:
-- typically, when using a single connection, the request time will be equal to the buffer timeout;
-- the server should be able to maintain a large number of open connections to fill the buffer.
+The obvious disadvantages of this approach are:
+- when using a single connection, request latency is typically equal to the buffer timeout;
+- the host system must be able to maintain a large number of open connections in order to fill the buffer efficiently.
+
+At the same time, it is:
+- easy to use and allows to build reliable services;
+- has good throughput under high loads.
 
 #### Usage sample:
 
@@ -28,12 +32,14 @@ const (
 
 type Item struct {}
 
+db := database.New(..., DatabaseConnCount)
+
 options := batch.Options[Item]{
   MaxLifetime:  BatchTimeout,      // default 100ms
   MaxSize:      DatabaseBatchSize, // default 1000
   FlushThreads: DatabaseConnCount, // default 1
   FlushFunc:    func(thread int, items []Item) error {
-    return db.conns[thread].InsertBatch(items)
+    return db.Conns[thread].Insert(items)
   },
 }
 
