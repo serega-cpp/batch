@@ -19,13 +19,16 @@ At the same time, it is:
 - easy to use and allows to build reliable services;
 - has good throughput under high loads.
 
+About timeouts and cancellation (make sure that `timeout` is greater than `Options.BatchFlushInterval`):
+- The global timeout (configured via `Options.TotalTimeout`) applies to the entire process, including put, collect, and flush operations. It is passed to the custom `FlushFunc`, which is responsible for handling the timeout through the provided context.
+- The request timeout (configured per call in `Put()` / `Puts()`) applies only to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout.
+
 #### Usage sample:
 
 ```
 import "github.com/serega-cpp/batch"
 
 const (
-	BatchTimeout      = 100 * time.Millisecond
 	DatabaseBatchSize = 10
 	DatabaseConnCount = 4
 )
@@ -35,11 +38,12 @@ type Item struct {}
 db := database.New(..., DatabaseConnCount)
 
 options := batch.Options[Item]{
-  MaxLifetime:  BatchTimeout,      // default 100ms
-  MaxSize:      DatabaseBatchSize, // default 1000
-  FlushThreads: DatabaseConnCount, // default 1
-  FlushFunc:    func(thread int, items []Item) error {
-    return db.Conns[thread].Insert(items)
+  TotalTimeout:       1s,
+  BatchFlushInterval: 100 * time.Millisecond,
+  BatchSize:          DatabaseBatchSize, // default 1000
+  FlushThreadsCount:  DatabaseConnCount, // default 1
+  FlushFunc: func(thread int, ctx context.Context, items []Item) error {
+    return db.Conns[thread].Insert(ctx, items)
   },
 }
 
@@ -47,7 +51,7 @@ b := batch.New[Item](options)
 defer b.Close()
 
 // and use it in a request handler
-err := b.Put(item)
+err := b.Put(ctx, item)
 ```
 
 #### Installation

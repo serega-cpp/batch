@@ -1,39 +1,45 @@
 package batch
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 /******************************************************************************
-*  Architecture of package (processing request stages):
-*  - create the operation for incoming request
-*  - send it via 'to_collector' channel to collector
-*  - collector() routine collects operations into the batch
-*  - when the batch is ready send it via 'to_writer' channel to writer
-*  - writer() routine calls the flash routine for the batch and returns results
+* Processing stages (and terminology):
+* - Create an operation for the incoming item(s)
+* - Send the operation to the collector
+* - The collector() routine groups operations into batches
+* - When a batch is ready (based on size or time), send it to the writer
+* - The writer() routine processes batches concurrently across multiple threads,
+*   flushes them, and returns the results
 ******************************************************************************/
 
 type Options[ItemType any] struct {
-	MaxLifetime  time.Duration // default 100ms
-	MaxSize      int           // default 1000
-	FlushThreads int           // default 1
-	FlushFunc    func(thread int, items []ItemType) error
+	TotalTimeout       time.Duration // default 300ms
+	BatchFlushInterval time.Duration // default 100ms
+	BatchSize          int           // default 1000
+	FlushThreadsCount  int           // default 1
+	FlushFunc          func(thread int, ctx context.Context, items []ItemType) error
 }
 
 func (o Options[ItemType]) withDefaults() Options[ItemType] {
-	if o.MaxLifetime == 0 {
-		o.MaxLifetime = 100 * time.Millisecond
+	if o.TotalTimeout == 0 {
+		o.TotalTimeout = 300 * time.Millisecond
 	}
-	if o.MaxSize == 0 {
-		o.MaxSize = 1000
+	if o.BatchFlushInterval == 0 {
+		o.BatchFlushInterval = 100 * time.Millisecond
 	}
-	if o.FlushThreads == 0 {
-		o.FlushThreads = 1
+	if o.BatchSize == 0 {
+		o.BatchSize = 1000
+	}
+	if o.FlushThreadsCount == 0 {
+		o.FlushThreadsCount = 1
 	}
 	if o.FlushFunc == nil {
-		o.FlushFunc = func(int, []ItemType) error {
+		o.FlushFunc = func(int, context.Context, []ItemType) error {
 			return nil
 		}
 	}
@@ -61,6 +67,8 @@ type operation[ItemType any] struct {
 type operationsBatch[ItemType any] struct {
 	items   []ItemType
 	results []chan error
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 func newOperationsBatch[ItemType any](size int) *operationsBatch[ItemType] {
@@ -70,9 +78,15 @@ func newOperationsBatch[ItemType any](size int) *operationsBatch[ItemType] {
 	}
 }
 
-func (ob *operationsBatch[ItemType]) reset() *operationsBatch[ItemType] {
+func (ob *operationsBatch[ItemType]) init(timeout time.Duration) *operationsBatch[ItemType] {
+	ob.ctx, ob.cancel = context.WithTimeout(context.Background(), timeout)
+	return ob
+}
+
+func (ob *operationsBatch[ItemType]) done() *operationsBatch[ItemType] {
 	ob.items = ob.items[:0]
 	ob.results = ob.results[:0]
+	ob.cancel()
 	return ob
 }
 
@@ -88,14 +102,14 @@ func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 		options:         options.withDefaults(),
 	}
 	b.operationsBatchPool.New = func() any {
-		return newOperationsBatch[ItemType](b.options.MaxSize)
+		return newOperationsBatch[ItemType](b.options.BatchSize)
 	}
-	b.metrics = newMetrics(b.options.FlushThreads)
+	b.metrics = newMetrics(b.options.FlushThreadsCount)
 
 	b.collectorWg.Add(1)
 	go b.collector()
 
-	for i := 0; i < b.options.FlushThreads; i++ {
+	for i := 0; i < b.options.FlushThreadsCount; i++ {
 		b.writerWg.Add(1)
 		go b.writer(i)
 	}
@@ -106,9 +120,9 @@ func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 func (b *Batch[ItemType]) collector() {
 	defer b.collectorWg.Done()
 
-	ob := b.operationsBatchPool.Get().(*operationsBatch[ItemType])
+	ob := b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
 
-	ticker := time.NewTicker(b.options.MaxLifetime)
+	ticker := time.NewTicker(b.options.BatchFlushInterval)
 	defer ticker.Stop()
 
 	for {
@@ -119,23 +133,25 @@ func (b *Batch[ItemType]) collector() {
 			if !ok {
 				flush = len(ob.items) > 0
 				done = true
-			} else if len(ob.items)+len(op.items) <= b.options.MaxSize {
+			} else if len(ob.items)+len(op.items) <= b.options.BatchSize {
 				ob.append(op)
 			} else if len(ob.items) > len(op.items) {
 				b.toWriterChan <- ob
-				ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
+				ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
 				ob.append(op)
 			} else {
-				tmp := b.operationsBatchPool.Get().(*operationsBatch[ItemType])
+				tmp := b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
 				tmp.append(op)
 				b.toWriterChan <- tmp
 			}
 		case <-ticker.C:
-			flush = len(ob.items) > 0
+			if flush = len(ob.items) > 0; !flush {
+				ob.init(b.options.TotalTimeout)
+			}
 		}
-		if flush || len(ob.items) >= b.options.MaxSize {
+		if flush || len(ob.items) >= b.options.BatchSize {
 			b.toWriterChan <- ob
-			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
+			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
 		}
 		if done {
 			break
@@ -147,21 +163,21 @@ func (b *Batch[ItemType]) writer(thread int) {
 	defer b.writerWg.Done()
 
 	for ob := range b.toWriterChan {
-		err := b.options.FlushFunc(thread, ob.items)
+		err := b.options.FlushFunc(thread, ob.ctx, ob.items)
 		atomic.AddInt64(&b.metrics.FlushesPerThreadCount[thread], 1)
 		for _, ch := range ob.results {
 			ch <- err
 			close(ch)
 		}
-		b.operationsBatchPool.Put(ob.reset())
+		b.operationsBatchPool.Put(ob.done())
 	}
 }
 
-func (b *Batch[ItemType]) Put(item ItemType) error {
-	return b.Puts([]ItemType{item})
+func (b *Batch[ItemType]) Put(ctx context.Context, item ItemType) error {
+	return b.Puts(ctx, []ItemType{item})
 }
 
-func (b *Batch[ItemType]) Puts(items []ItemType) error {
+func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -173,9 +189,12 @@ func (b *Batch[ItemType]) Puts(items []ItemType) error {
 	atomic.AddInt64(&b.metrics.IncomingCount, int64(len(items)))
 	defer atomic.AddInt64(&b.metrics.ServedCount, int64(len(items)))
 
-	b.toCollectorChan <- op
-	err := <-op.result
-	return err
+	select {
+	case b.toCollectorChan <- op:
+		return <-op.result
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (b *Batch[ItemType]) Metrics() Metrics {
