@@ -1,8 +1,9 @@
 package batch
 
 type Metrics struct {
-	IncomingCount int64
-	ServedCount   int64
+	ServedCount        int64
+	ServedWithErrCount int64
+	RejectedCount      int64
 
 	FlushesCount          int64
 	FlushesPerThreadCount []int64

@@ -33,6 +33,10 @@ func TestBatch(t *testing.T) {
 		options := batch.Options[string]{
 			BatchSize:         len(items),
 			FlushThreadsCount: threadsCount,
+			FlushFunc: func(int, context.Context, []string) error {
+				time.Sleep(10 * time.Millisecond)
+				return nil
+			},
 		}
 
 		bat := batch.New(options)
@@ -49,12 +53,13 @@ func TestBatch(t *testing.T) {
 		}
 		wg.Wait()
 
-		metrics := bat.Metrics()
-		var expectedItems int64 = int64(threadsCount * len(items))
-		require.Equal(t, expectedItems, metrics.IncomingCount)
-		require.Equal(t, expectedItems, metrics.ServedCount)
-		require.Equal(t, threadsCount, len(metrics.FlushesPerThreadCount))
-		require.Equal(t, int64(threadsCount), metrics.FlushesCount)
+		require.Equal(t, batch.Metrics{
+			ServedCount:           int64(threadsCount * len(items)),
+			ServedWithErrCount:    0,
+			RejectedCount:         0,
+			FlushesCount:          int64(threadsCount),
+			FlushesPerThreadCount: []int64{1, 1, 1, 1},
+		}, bat.Metrics())
 	})
 
 	t.Run("Puts empty", func(t *testing.T) {
@@ -238,6 +243,29 @@ func TestBatch(t *testing.T) {
 		}
 	})
 
+	t.Run("Flush error", func(t *testing.T) {
+		options := batch.Options[string]{
+			BatchSize: 1,
+			FlushFunc: func(_ int, _ context.Context, _ []string) error {
+				return context.Canceled // any error
+			},
+		}
+
+		bat := batch.New(options)
+		defer bat.Close()
+
+		err := bat.Put(context.Background(), "test")
+		require.ErrorIs(t, err, context.Canceled)
+
+		require.Equal(t, batch.Metrics{
+			ServedCount:           1,
+			ServedWithErrCount:    1,
+			RejectedCount:         0,
+			FlushesCount:          1,
+			FlushesPerThreadCount: []int64{1},
+		}, bat.Metrics())
+	})
+
 	t.Run("Put context timeout", func(t *testing.T) {
 		options := batch.Options[string]{
 			BatchSize: 1,
@@ -272,11 +300,22 @@ func TestBatch(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 		go func() {
 			defer wg.Done()
-			// 3-rd put waits for the buffer, so can be canceled by context timeout
-			err := bat.Put(ctx, "test")
+			// 3-rd put needs to wait for the buffer, so will be canceled by timeout
+			err := bat.Put(ctx, "test") // with true context
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+
+			err = bat.Put(batch.NilCtx, "test") // without context
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 		}()
 		wg.Wait()
+
+		require.Equal(t, batch.Metrics{
+			ServedCount:           2,
+			ServedWithErrCount:    0,
+			RejectedCount:         2,
+			FlushesCount:          2,
+			FlushesPerThreadCount: []int64{2},
+		}, bat.Metrics())
 	})
 
 	t.Run("Flush context timeout", func(t *testing.T) {
@@ -300,6 +339,14 @@ func TestBatch(t *testing.T) {
 
 		err := bat.Put(context.Background(), "test")
 		require.ErrorIs(t, err, context.DeadlineExceeded)
+
+		require.Equal(t, batch.Metrics{
+			ServedCount:           1,
+			ServedWithErrCount:    1,
+			RejectedCount:         0,
+			FlushesCount:          1,
+			FlushesPerThreadCount: []int64{1},
+		}, bat.Metrics())
 	})
 }
 

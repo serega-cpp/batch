@@ -18,7 +18,7 @@ import (
 ******************************************************************************/
 
 type Options[ItemType any] struct {
-	TotalTimeout       time.Duration // default 300ms
+	TotalTimeout       time.Duration // default 1s
 	BatchFlushInterval time.Duration // default 100ms
 	BatchSize          int           // default 1000
 	FlushThreadsCount  int           // default 1
@@ -27,7 +27,7 @@ type Options[ItemType any] struct {
 
 func (o Options[ItemType]) withDefaults() Options[ItemType] {
 	if o.TotalTimeout == 0 {
-		o.TotalTimeout = 300 * time.Millisecond
+		o.TotalTimeout = time.Second
 	}
 	if o.BatchFlushInterval == 0 {
 		o.BatchFlushInterval = 100 * time.Millisecond
@@ -165,6 +165,9 @@ func (b *Batch[ItemType]) writer(thread int) {
 	for ob := range b.toWriterChan {
 		err := b.options.FlushFunc(thread, ob.ctx, ob.items)
 		atomic.AddInt64(&b.metrics.FlushesPerThreadCount[thread], 1)
+		if err != nil {
+			atomic.AddInt64(&b.metrics.ServedWithErrCount, int64(len(ob.items)))
+		}
 		for _, ch := range ob.results {
 			ch <- err
 			close(ch)
@@ -172,6 +175,8 @@ func (b *Batch[ItemType]) writer(thread int) {
 		b.operationsBatchPool.Put(ob.done())
 	}
 }
+
+var NilCtx context.Context
 
 func (b *Batch[ItemType]) Put(ctx context.Context, item ItemType) error {
 	return b.Puts(ctx, []ItemType{item})
@@ -186,13 +191,23 @@ func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 		result: make(chan error),
 	}
 
-	atomic.AddInt64(&b.metrics.IncomingCount, int64(len(items)))
-	defer atomic.AddInt64(&b.metrics.ServedCount, int64(len(items)))
+	if ctx == nil {
+		select {
+		case b.toCollectorChan <- op:
+			defer atomic.AddInt64(&b.metrics.ServedCount, int64(len(items)))
+			return <-op.result
+		default:
+			atomic.AddInt64(&b.metrics.RejectedCount, int64(len(items)))
+			return context.DeadlineExceeded
+		}
+	}
 
 	select {
 	case b.toCollectorChan <- op:
+		defer atomic.AddInt64(&b.metrics.ServedCount, int64(len(items)))
 		return <-op.result
 	case <-ctx.Done():
+		atomic.AddInt64(&b.metrics.RejectedCount, int64(len(items)))
 		return ctx.Err()
 	}
 }
@@ -205,8 +220,9 @@ func (b *Batch[ItemType]) Metrics() Metrics {
 		flushesCount += flushesPerThreadCount[i]
 	}
 	return Metrics{
-		IncomingCount:         atomic.LoadInt64(&b.metrics.IncomingCount),
 		ServedCount:           atomic.LoadInt64(&b.metrics.ServedCount),
+		ServedWithErrCount:    atomic.LoadInt64(&b.metrics.ServedWithErrCount),
+		RejectedCount:         atomic.LoadInt64(&b.metrics.RejectedCount),
 		FlushesCount:          flushesCount,
 		FlushesPerThreadCount: flushesPerThreadCount,
 	}
