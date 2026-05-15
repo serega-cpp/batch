@@ -30,11 +30,12 @@ func TestBatch(t *testing.T) {
 
 		threadsCount := 4
 		items := []string{"test1", "test2", "test3", "test4"}
+		flushesPerThreadCount := []int64{0, 0, 0, 0}
 		options := batch.Options[string]{
 			BatchSize:         len(items),
 			FlushThreadsCount: threadsCount,
-			FlushFunc: func(int, context.Context, []string) error {
-				time.Sleep(10 * time.Millisecond)
+			FlushFunc: func(thread int, _ context.Context, _ []string) error {
+				flushesPerThreadCount[thread]++
 				return nil
 			},
 		}
@@ -58,7 +59,7 @@ func TestBatch(t *testing.T) {
 			ServedWithErrCount:    0,
 			RejectedCount:         0,
 			FlushesCount:          int64(threadsCount),
-			FlushesPerThreadCount: []int64{1, 1, 1, 1},
+			FlushesPerThreadCount: flushesPerThreadCount,
 		}, bat.Metrics())
 	})
 
@@ -153,6 +154,47 @@ func TestBatch(t *testing.T) {
 		}
 	})
 
+	t.Run("Puts flush by time", func(t *testing.T) {
+		ctx := context.Background()
+
+		items := []string{"test1", "test2", "test3", "test4"}
+		results := make(chan string, len(items)+1)
+
+		options := batch.Options[string]{
+			BatchFlushInterval: 100 * time.Millisecond,
+			BatchSize:          100,
+			FlushFunc: func(_ int, _ context.Context, items []string) error {
+				for i := range items {
+					results <- items[i]
+				}
+				return nil
+			},
+		}
+
+		bat := batch.New(options)
+		defer bat.Close()
+
+		timer := time.NewTimer(options.BatchFlushInterval * 2)
+		defer timer.Stop()
+
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- bat.Puts(ctx, items)
+		}()
+
+		select {
+		case err := <-errCh:
+			require.NoError(t, err)
+		case <-timer.C:
+			t.Fatal("The flush was not done within the expected interval")
+		}
+
+		for i := range items {
+			result := <-results
+			require.Equal(t, items[i], result)
+		}
+	})
+
 	t.Run("Batch overflow case one", func(t *testing.T) {
 		ctx := context.Background()
 
@@ -182,7 +224,7 @@ func TestBatch(t *testing.T) {
 			err := bat.Puts(ctx, items1)
 			require.NoError(t, err)
 		}()
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond) // guarantee the expected order of requests
 		go func() {
 			err := bat.Puts(ctx, items2)
 			require.NoError(t, err)
@@ -227,7 +269,7 @@ func TestBatch(t *testing.T) {
 			err := bat.Puts(ctx, items1)
 			require.NoError(t, err)
 		}()
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond) // guarantee the expected order of requests
 		go func() {
 			err := bat.Puts(ctx, items2)
 			require.NoError(t, err)
@@ -247,7 +289,7 @@ func TestBatch(t *testing.T) {
 		options := batch.Options[string]{
 			BatchSize: 1,
 			FlushFunc: func(_ int, _ context.Context, _ []string) error {
-				return context.Canceled // any error
+				return context.Canceled
 			},
 		}
 
@@ -270,6 +312,8 @@ func TestBatch(t *testing.T) {
 		options := batch.Options[string]{
 			BatchSize: 1,
 			FlushFunc: func(_ int, _ context.Context, _ []string) error {
+				// sleep function ensures that all requests below are received and
+				// their context able timeout before the 1-st data flush is complete
 				time.Sleep(500 * time.Millisecond)
 				return nil
 			},
@@ -290,21 +334,22 @@ func TestBatch(t *testing.T) {
 			err := bat.Put(ctx, "test")
 			require.NoError(t, err)
 		}()
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond) // guarantee the expected order of requests
 		go func() {
 			defer wg.Done()
 			// 2-nd put goes to the new buffer, so no context timeout
 			err := bat.Put(ctx, "test")
 			require.NoError(t, err)
 		}()
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond) // guarantee the expected order of requests
 		go func() {
 			defer wg.Done()
 			// 3-rd put needs to wait for the buffer, so will be canceled by timeout
-			err := bat.Put(ctx, "test") // with true context
+			err := bat.Put(ctx, "test")
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 
-			err = bat.Put(batch.NilCtx, "test") // without context
+			// without context, rejected immediately as buffer is full
+			err = bat.Put(batch.NilCtx, "test")
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 		}()
 		wg.Wait()

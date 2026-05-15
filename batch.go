@@ -13,8 +13,8 @@ import (
 * - Send the operation to the collector
 * - The collector() routine groups operations into batches
 * - When a batch is ready (based on size or time), send it to the writer
-* - The writer() routine processes batches concurrently across multiple threads,
-*   flushes them, and returns the results
+* - The writer() routine flushes batches concurrently across flush threads
+* - When flush completes, it returns the result, thus completing the request
 ******************************************************************************/
 
 type Options[ItemType any] struct {
