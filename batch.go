@@ -176,8 +176,6 @@ func (b *Batch[ItemType]) writer(thread int) {
 	}
 }
 
-var NilCtx context.Context
-
 func (b *Batch[ItemType]) Put(ctx context.Context, item ItemType) error {
 	return b.Puts(ctx, []ItemType{item})
 }
@@ -190,18 +188,6 @@ func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 		items:  items,
 		result: make(chan error),
 	}
-
-	if ctx == nil {
-		select {
-		case b.toCollectorChan <- op:
-			defer atomic.AddInt64(&b.metrics.ServedCount, int64(len(items)))
-			return <-op.result
-		default:
-			atomic.AddInt64(&b.metrics.RejectedCount, int64(len(items)))
-			return context.DeadlineExceeded
-		}
-	}
-
 	select {
 	case b.toCollectorChan <- op:
 		defer atomic.AddInt64(&b.metrics.ServedCount, int64(len(items)))

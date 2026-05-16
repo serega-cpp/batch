@@ -21,7 +21,7 @@ At the same time, it is:
 
 About timeouts and cancellation (make sure that timeout is greater than `Options.BatchFlushInterval`):
 - The global timeout (configured via `Options.TotalTimeout`) applies to the entire process, including put, collect, and flush operations. It is passed to the custom `FlushFunc`, which is responsible for handling the timeout through the provided context.
-- The request timeout (configured per call in `Put()` / `Puts()`) applies only to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout. You can pass `batch.NilCtx` instead of an actual timeout context to cancel the operation immediately if the buffer is currently full.
+- The request timeout (configured per call in `Put()` / `Puts()`) applies only to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout.
 
 #### Usage sample:
 

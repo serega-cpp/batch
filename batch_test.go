@@ -347,17 +347,13 @@ func TestBatch(t *testing.T) {
 			// 3-rd put needs to wait for the buffer, so will be canceled by timeout
 			err := bat.Put(ctx, "test")
 			require.ErrorIs(t, err, context.DeadlineExceeded)
-
-			// without context, rejected immediately as buffer is full
-			err = bat.Put(batch.NilCtx, "test")
-			require.ErrorIs(t, err, context.DeadlineExceeded)
 		}()
 		wg.Wait()
 
 		require.Equal(t, batch.Metrics{
 			ServedCount:           2,
 			ServedWithErrCount:    0,
-			RejectedCount:         2,
+			RejectedCount:         1,
 			FlushesCount:          2,
 			FlushesPerThreadCount: []int64{2},
 		}, bat.Metrics())
