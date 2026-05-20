@@ -22,7 +22,7 @@ type Options[ItemType any] struct {
 	BatchFlushInterval time.Duration // default 100ms
 	BatchSize          int           // default 1000
 	FlushThreadsCount  int           // default 1
-	FlushFunc          func(thread int, ctx context.Context, items []ItemType) error
+	FlushFunc          func(ctx context.Context, thread int, items []ItemType) error
 }
 
 func (o Options[ItemType]) withDefaults() Options[ItemType] {
@@ -39,7 +39,7 @@ func (o Options[ItemType]) withDefaults() Options[ItemType] {
 		o.FlushThreadsCount = 1
 	}
 	if o.FlushFunc == nil {
-		o.FlushFunc = func(int, context.Context, []ItemType) error {
+		o.FlushFunc = func(context.Context, int, []ItemType) error {
 			return nil
 		}
 	}
@@ -163,7 +163,7 @@ func (b *Batch[ItemType]) writer(thread int) {
 	defer b.writerWg.Done()
 
 	for ob := range b.toWriterChan {
-		err := b.options.FlushFunc(thread, ob.ctx, ob.items)
+		err := b.options.FlushFunc(ob.ctx, thread, ob.items)
 		atomic.AddInt64(&b.metrics.FlushesPerThreadCount[thread], 1)
 		if err != nil {
 			atomic.AddInt64(&b.metrics.ServedWithErrCount, int64(len(ob.items)))

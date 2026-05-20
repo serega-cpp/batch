@@ -23,7 +23,7 @@ func BenchmarkBatch(b *testing.B) {
 
 			bat := batch.New(batch.Options[empty]{
 				FlushThreadsCount: 1,
-				FlushFunc: func(_ int, _ context.Context, items []empty) error {
+				FlushFunc: func(_ context.Context, _ int, items []empty) error {
 					atomic.AddInt64(&processed, int64(-len(items)))
 					return nil
 				},

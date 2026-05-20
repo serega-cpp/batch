@@ -42,7 +42,7 @@ options := batch.Options[Item]{
   BatchFlushInterval: 100 * time.Millisecond,
   BatchSize:          DatabaseBatchSize, // default 1000
   FlushThreadsCount:  DatabaseConnCount, // default 1
-  FlushFunc: func(thread int, ctx context.Context, items []Item) error {
+  FlushFunc: func(ctx context.Context, thread int, items []Item) error {
     return db.Conns[thread].Insert(ctx, items)
   },
 }
