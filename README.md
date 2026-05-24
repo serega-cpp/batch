@@ -19,6 +19,8 @@ At the same time, it is:
 - easy to use and allows to build reliable services;
 - has good throughput under high loads.
 
+The package doesn't guarantee the maximum batch size (configured via `Options.BatchSize`). It tries its best, but the buffer sent to the database may be larger or smaller than it. This is because the set of items from a single `Puts()` call cannot be distributed across different batches.
+
 There are two different timeouts to control the execution time of batch operations:
 - The request timeout (configured per call in `Put()` / `Puts()`) applies to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout.
 - The batch processing timeout (configured via `Options.BatchTimeout`) applies to buffer collection and flush operations. It is also passed to the user-defined `FlushFunc` function, which is responsible for handling the timeout through the provided context.
