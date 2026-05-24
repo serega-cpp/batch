@@ -19,9 +19,9 @@ At the same time, it is:
 - easy to use and allows to build reliable services;
 - has good throughput under high loads.
 
-About timeouts and cancellation (make sure that timeout is greater than `Options.BatchFlushInterval`):
-- The batch timeout (configured via `Options.BatchTimeout`) applies to the collecting, and flushing operations. It is passed to the custom `FlushFunc`, which is responsible for handling the timeout through the provided context.
+There are two different timeouts to control the execution time of batch operations:
 - The request timeout (configured per call in `Put()` / `Puts()`) applies to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout.
+- The batch processing timeout (configured via `Options.BatchTimeout`) applies to buffer collection and flush operations. It is also passed to the user-defined `FlushFunc` function, which is responsible for handling the timeout through the provided context.
 
 #### Usage sample:
 
