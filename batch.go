@@ -133,17 +133,15 @@ func (b *Batch[ItemType]) collector() {
 			if !ok {
 				flush = len(ob.items) > 0
 				done = true
-			} else if len(ob.items)+len(op.items) <= b.options.BatchSize {
-				ob.append(op)
-			} else if len(ob.items) > len(op.items) {
+				break
+			}
+			// In case of expected batch overflow, if there are already
+			// enough items in the batch, we will send it to writer here
+			if len(ob.items)+len(op.items) > b.options.BatchSize && len(ob.items) > len(op.items) {
 				b.toWriterChan <- ob
 				ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
-				ob.append(op)
-			} else {
-				tmp := b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
-				tmp.append(op)
-				b.toWriterChan <- tmp
 			}
+			ob.append(op)
 		case <-ticker.C:
 			if flush = len(ob.items) > 0; !flush {
 				ob.init(b.options.TotalTimeout)

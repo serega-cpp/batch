@@ -195,56 +195,11 @@ func TestBatch(t *testing.T) {
 		}
 	})
 
-	t.Run("Batch overflow case one", func(t *testing.T) {
+	t.Run("Batch overflow special case", func(t *testing.T) {
 		ctx := context.Background()
 
-		// expecting that on overflow we flush the latest
-		// incoming items insted of the items from the buffer
-		batchSize := 6
-		items1 := []string{"test1", "test2", "test3"}
-		items2 := []string{"test4", "test5", "test6", "test7"}
-		results := make(chan string, len(items1)+len(items2)+1)
-
-		options := batch.Options[string]{
-			BatchFlushInterval: 1 * time.Second,
-			BatchSize:          batchSize,
-			FlushFunc: func(_ context.Context, _ int, items []string) error {
-				assert.Greater(t, len(items), 0)
-				for i := range items {
-					results <- items[i]
-				}
-				return nil
-			},
-		}
-
-		bat := batch.New(options)
-		defer bat.Close()
-
-		go func() {
-			err := bat.Puts(ctx, items1)
-			require.NoError(t, err)
-		}()
-		time.Sleep(25 * time.Millisecond) // guarantee the expected order of requests
-		go func() {
-			err := bat.Puts(ctx, items2)
-			require.NoError(t, err)
-		}()
-
-		for i := range items2 {
-			result := <-results
-			require.Equal(t, items2[i], result)
-		}
-		for i := range items1 {
-			result := <-results
-			require.Equal(t, items1[i], result)
-		}
-	})
-
-	t.Run("Batch overflow case two", func(t *testing.T) {
-		ctx := context.Background()
-
-		// expecting that on overflow we flush the buffer
-		// and put the latest incoming items into it
+		// expecting that on overflow we flush the batch
+		// immediately and place newly received items in it
 		batchSize := 6
 		items1 := []string{"test1", "test2", "test3", "test4"}
 		items2 := []string{"test5", "test6", "test7"}
