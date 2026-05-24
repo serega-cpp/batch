@@ -18,7 +18,7 @@ import (
 ******************************************************************************/
 
 type Options[ItemType any] struct {
-	TotalTimeout       time.Duration // default 1s
+	BatchTimeout       time.Duration // default 1s
 	BatchFlushInterval time.Duration // default 100ms
 	BatchSize          int           // default 1000
 	FlushThreadsCount  int           // default 1
@@ -26,8 +26,8 @@ type Options[ItemType any] struct {
 }
 
 func (o Options[ItemType]) withDefaults() Options[ItemType] {
-	if o.TotalTimeout == 0 {
-		o.TotalTimeout = time.Second
+	if o.BatchTimeout == 0 {
+		o.BatchTimeout = time.Second
 	}
 	if o.BatchFlushInterval == 0 {
 		o.BatchFlushInterval = 100 * time.Millisecond
@@ -78,12 +78,11 @@ func newOperationsBatch[ItemType any](size int) *operationsBatch[ItemType] {
 	}
 }
 
-func (ob *operationsBatch[ItemType]) init(timeout time.Duration) *operationsBatch[ItemType] {
+func (ob *operationsBatch[ItemType]) initCtx(timeout time.Duration) {
 	ob.ctx, ob.cancel = context.WithTimeout(context.Background(), timeout)
-	return ob
 }
 
-func (ob *operationsBatch[ItemType]) done() *operationsBatch[ItemType] {
+func (ob *operationsBatch[ItemType]) reset() *operationsBatch[ItemType] {
 	ob.items = ob.items[:0]
 	ob.results = ob.results[:0]
 	ob.cancel()
@@ -120,7 +119,7 @@ func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 func (b *Batch[ItemType]) collector() {
 	defer b.collectorWg.Done()
 
-	ob := b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
+	ob := b.operationsBatchPool.Get().(*operationsBatch[ItemType])
 
 	ticker := time.NewTicker(b.options.BatchFlushInterval)
 	defer ticker.Stop()
@@ -136,20 +135,22 @@ func (b *Batch[ItemType]) collector() {
 				break
 			}
 			// In case of expected batch overflow, if there are already
-			// enough items in the batch, we will send it to writer here
+			// enough items in the batch, we will send it to writer immediately
 			if len(ob.items)+len(op.items) > b.options.BatchSize && len(ob.items) > len(op.items) {
 				b.toWriterChan <- ob
-				ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
+				ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
+			}
+			// Set a batch timeout when the first item is added to the batch
+			if len(ob.items) == 0 {
+				ob.initCtx(b.options.BatchTimeout)
 			}
 			ob.append(op)
 		case <-ticker.C:
-			if flush = len(ob.items) > 0; !flush {
-				ob.init(b.options.TotalTimeout)
-			}
+			flush = len(ob.items) > 0
 		}
 		if flush || len(ob.items) >= b.options.BatchSize {
 			b.toWriterChan <- ob
-			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType]).init(b.options.TotalTimeout)
+			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
 		}
 		if done {
 			break
@@ -170,7 +171,7 @@ func (b *Batch[ItemType]) writer(thread int) {
 			ch <- err
 			close(ch)
 		}
-		b.operationsBatchPool.Put(ob.done())
+		b.operationsBatchPool.Put(ob.reset())
 	}
 }
 

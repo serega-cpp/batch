@@ -20,8 +20,8 @@ At the same time, it is:
 - has good throughput under high loads.
 
 About timeouts and cancellation (make sure that timeout is greater than `Options.BatchFlushInterval`):
-- The global timeout (configured via `Options.TotalTimeout`) applies to the entire process, including put, collect, and flush operations. It is passed to the custom `FlushFunc`, which is responsible for handling the timeout through the provided context.
-- The request timeout (configured per call in `Put()` / `Puts()`) applies only to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout.
+- The batch timeout (configured via `Options.BatchTimeout`) applies to the collecting, and flushing operations. It is passed to the custom `FlushFunc`, which is responsible for handling the timeout through the provided context.
+- The request timeout (configured per call in `Put()` / `Puts()`) applies to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout.
 
 #### Usage sample:
 
@@ -38,7 +38,7 @@ type Item struct {}
 db := database.New(..., DatabaseConnCount)
 
 options := batch.Options[Item]{
-  TotalTimeout:       time.Second,
+  BatchTimeout:       time.Second,
   BatchFlushInterval: 100 * time.Millisecond,
   BatchSize:          DatabaseBatchSize, // default 1000
   FlushThreadsCount:  DatabaseConnCount, // default 1

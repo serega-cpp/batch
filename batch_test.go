@@ -316,7 +316,7 @@ func TestBatch(t *testing.T) {
 
 	t.Run("Flush context timeout", func(t *testing.T) {
 		options := batch.Options[string]{
-			TotalTimeout: 100 * time.Millisecond,
+			BatchTimeout: 100 * time.Millisecond,
 			BatchSize:    1,
 			FlushFunc: func(ctx context.Context, _ int, _ []string) error {
 				ticker := time.NewTicker(200 * time.Millisecond)
