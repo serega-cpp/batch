@@ -344,6 +344,68 @@ func TestBatch(t *testing.T) {
 			FlushesPerThreadCount: []int64{1},
 		}, bat.Metrics())
 	})
+
+	t.Run("PutsMuch", func(t *testing.T) {
+		ctx := context.Background()
+
+		items := []string{"test1", "test2", "test3", "test4", "test5"}
+		results := make(chan string, len(items)+1)
+
+		options := batch.Options[string]{
+			BatchSize: 2,
+			FlushFunc: func(_ context.Context, _ int, items []string) error {
+				for i := range items {
+					results <- items[i]
+				}
+				return nil
+			},
+		}
+
+		bat := batch.New(options)
+		defer bat.Close()
+
+		pr := bat.PutsMuch(ctx, items, 0)
+		require.NoError(t, VerifySegments(pr))
+
+		for i := range items {
+			result := <-results
+			require.Equal(t, items[i], result)
+		}
+	})
+
+	t.Run("PutsMuch error", func(t *testing.T) {
+		ctx := context.Background()
+
+		items := []string{"test1", "test2", "test3", "test4", "test5"}
+		batchNumber := 0
+
+		options := batch.Options[string]{
+			BatchSize: 2,
+			FlushFunc: func(_ context.Context, _ int, _ []string) error {
+				batchNumber++
+				if batchNumber == 2 {
+					return context.DeadlineExceeded
+				}
+				return nil
+			},
+		}
+
+		bat := batch.New(options)
+		defer bat.Close()
+
+		pr := bat.PutsMuch(ctx, items, 0)
+		require.Error(t, VerifySegments(pr))
+
+		// Only two segments should be processed
+		require.Equal(t, 2, len(pr))
+	})
 }
 
 type empty struct{}
+
+func VerifySegments(segments []batch.ItemsSegment) error {
+	if end := len(segments); end > 0 {
+		return segments[end-1].Err
+	}
+	return nil
+}
