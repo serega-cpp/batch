@@ -364,8 +364,22 @@ func TestBatch(t *testing.T) {
 		bat := batch.New(options)
 		defer bat.Close()
 
-		pr := bat.PutsMuch(ctx, items, 0)
-		require.NoError(t, VerifySegments(pr))
+		pr := bat.PutsMuch(ctx, ctx, items, 0)
+		require.Equal(t, []batch.ItemsSegment{
+			{
+				Start: 0,
+				End:   2,
+				Err:   nil,
+			}, {
+				Start: 2,
+				End:   4,
+				Err:   nil,
+			}, {
+				Start: 4,
+				End:   5,
+				Err:   nil,
+			},
+		}, pr)
 
 		for i := range items {
 			result := <-results
@@ -393,19 +407,19 @@ func TestBatch(t *testing.T) {
 		bat := batch.New(options)
 		defer bat.Close()
 
-		pr := bat.PutsMuch(ctx, items, 0)
-		require.Error(t, VerifySegments(pr))
-
-		// Only two segments should be processed
-		require.Equal(t, 2, len(pr))
+		pr := bat.PutsMuch(ctx, ctx, items, 0)
+		require.Equal(t, []batch.ItemsSegment{
+			{
+				Start: 0,
+				End:   2,
+				Err:   nil,
+			}, {
+				Start: 2,
+				End:   4,
+				Err:   context.DeadlineExceeded,
+			},
+		}, pr)
 	})
 }
 
 type empty struct{}
-
-func VerifySegments(segments []batch.ItemsSegment) error {
-	if end := len(segments); end > 0 {
-		return segments[end-1].Err
-	}
-	return nil
-}

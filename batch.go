@@ -111,11 +111,23 @@ func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 }
 
 // PutsMuch allows you to process huge data sets that exceed the bucket size
-// by splitting them into smaller segments using the splitBy parameter.
-func (b *Batch[ItemType]) PutsMuch(ctx context.Context, items []ItemType, splitBy int) []ItemsSegment {
+// by splitting them into smaller segments using the splitBy parameter. If you
+// pass 0, the exact batch size will be used. To ensure fairness when serving
+// many clients, the function transmits segments sequentially one after another.
+// ctxInitial is used to add the first segment to the bucket, and ctxCompletion
+// is used until all remaining segments are added. It is expected that the latter
+// will be set to a longer timeout to ensure completion of the entire operation.
+// To force cancellation of an operation, both contexts should be canceled.
+func (b *Batch[ItemType]) PutsMuch(
+	ctxInitial context.Context,
+	ctxCompletion context.Context,
+	items []ItemType,
+	splitBy int,
+) []ItemsSegment {
 	if splitBy == 0 {
 		splitBy = b.options.BatchSize
 	}
+	ctx := ctxInitial
 	var segments []ItemsSegment
 	for i := 0; i < len(items); i += splitBy {
 		end := min(i+splitBy, len(items))
@@ -128,6 +140,7 @@ func (b *Batch[ItemType]) PutsMuch(ctx context.Context, items []ItemType, splitB
 		if err != nil {
 			break
 		}
+		ctx = ctxCompletion
 	}
 	return segments
 }
