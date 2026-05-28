@@ -19,7 +19,7 @@ At the same time, it is:
 - easy to use and allows to build reliable services;
 - has good throughput under high loads.
 
-The package doesn't guarantee the maximum batch size (configured via `Options.BatchSize`). It tries its best, but the items count sent to the database may be larger or smaller than it. This is because the set of items from a single `Puts()` call is always sent to the same backet. This makes sense, as it guarantees request processing time. If you still need to work with large sets of items, you can use `PutsMuch()` which splits items into segments and process them one-by-one. In this case, you can also report in the request response which items were processed and which were not.
+The package flushes the buffer either after reaching a specified size (configured with `Options.BatchSize`) or after its lifetime expires (configured with `Options.BatchFlushInterval`). It does not guarantee that the buffer will always be completely full on flushing. It tries its best, but the items count sent to the database may be larger or smaller than the size. All items from a single `Puts()` call are always sent to the same buffer, so try to keep the number of items reasonable. If you need to work with large sets of items, you can use `PutsMuch()` which splits items into segments and process them one-by-one.
 
 There are two different timeouts to control the execution time of batch operations:
 - The request timeout (configured per call in `Put()` / `Puts()`) applies to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout.

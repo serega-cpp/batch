@@ -20,7 +20,7 @@ import (
 // Options contains the configuration of the batch
 // instance (each parameter has a default value).
 type Options[ItemType any] struct {
-	BatchTimeout       time.Duration // default 1s
+	BatchTimeout       time.Duration // collection + flushing, default 1s
 	BatchFlushInterval time.Duration // default 100ms
 	BatchSize          int           // default 1000
 	FlushThreadsCount  int           // default 1
@@ -86,12 +86,16 @@ func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 	return b
 }
 
-// Put processes the single item
+// Put processes the single item. ctx applies to the operation of adding an item
+// to the buffer. Once the item has been successfully appended to the buffer,
+// the operation can no longer be cancelled through this context.
 func (b *Batch[ItemType]) Put(ctx context.Context, item ItemType) error {
 	return b.Puts(ctx, []ItemType{item})
 }
 
-// Puts processes items slice
+// Puts processes items slice. ctx applies to the operation of adding items
+// to the buffer. Once the items have been successfully appended to the buffer,
+// the operation can no longer be cancelled through this context.
 func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 	if len(items) == 0 {
 		return nil
