@@ -1,6 +1,6 @@
 package batch
 
-// Metrics contains the package statistics
+// Metrics contains the package statistics.
 type Metrics struct {
 	ServedCount        int64 // successfully flushed
 	ServedWithErrCount int64 // failed to flush

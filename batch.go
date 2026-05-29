@@ -8,7 +8,7 @@ import (
 )
 
 ///////////////////////////////////////////////////////////////////////////////
-// Processing stages (and terminology):
+// The package operation logic:
 // - Create an operation for the incoming item(s)
 // - Send the operation to the collector
 // - The collector() routine groups operations into batches
@@ -20,11 +20,12 @@ import (
 // Options contains the configuration of the batch
 // instance (each parameter has a default value).
 type Options[ItemType any] struct {
-	BatchTimeout       time.Duration // collection + flushing, default 1s
+	BatchTimeout       time.Duration // timeout for the buffer collection & flushing steps, default 1s
 	BatchFlushInterval time.Duration // default 100ms
 	BatchSize          int           // default 1000
 	FlushThreadsCount  int           // default 1
-	FlushFunc          func(ctx context.Context, thread int, items []ItemType) error
+
+	FlushFunc func(ctx context.Context, thread int, items []ItemType) error // do nothing by default
 }
 
 func (o Options[ItemType]) withDefaults() Options[ItemType] {
@@ -63,7 +64,7 @@ type Batch[ItemType any] struct {
 	options Options[ItemType]
 }
 
-// New creates the batch using provided options
+// New creates the batch using provided options.
 func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 	b := &Batch[ItemType]{
 		toCollectorChan: make(chan *operation[ItemType]),
@@ -95,7 +96,8 @@ func (b *Batch[ItemType]) Put(ctx context.Context, item ItemType) error {
 
 // Puts processes items slice. ctx applies to the operation of adding items
 // to the buffer. Once the items have been successfully appended to the buffer,
-// the operation can no longer be cancelled through this context.
+// the operation can no longer be cancelled through this context. The items are
+// guaranteed to go into the same buffer and will be flushed simultaneously.
 func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 	if len(items) == 0 {
 		return nil
@@ -114,14 +116,14 @@ func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 	}
 }
 
-// PutsMuch allows you to process huge data sets that exceed the bucket size
+// PutsMuch allows you to process huge data sets that exceed the buffer size
 // by splitting them into smaller segments using the splitBy parameter. If you
-// pass 0, the exact batch size will be used. To ensure fairness when serving
-// many clients, the function transmits segments sequentially one after another.
-// ctxInitial is used to add the first segment to the bucket, and ctxCompletion
-// is used until all remaining segments are added. It is expected that the latter
-// will be set to a longer timeout to ensure completion of the entire operation.
-// To force cancellation of an operation, both contexts should be canceled.
+// pass 0, the exact batch size will be used. The function transmits segments
+// sequentially one after another using Puts function. ctxInitial is used to add
+// the first segment to the buffer, and ctxCompletion is used until all remaining
+// segments are added. It is expected that the latter will be set to a longer
+// timeout to ensure completion of the entire operation. To force cancellation
+// of an operation, both contexts should be canceled.
 func (b *Batch[ItemType]) PutsMuch(
 	ctxInitial context.Context,
 	ctxCompletion context.Context,
