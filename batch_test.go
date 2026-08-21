@@ -32,7 +32,7 @@ func TestBatch(t *testing.T) {
 		items := []string{"test1", "test2", "test3", "test4"}
 		flushesPerThreadCount := []int64{0, 0, 0, 0}
 		options := batch.Options[string]{
-			BatchSize:         len(items),
+			BatchFlushSize:    len(items),
 			FlushThreadsCount: threadsCount,
 			FlushFunc: func(_ context.Context, thread int, _ []string) error {
 				flushesPerThreadCount[thread]++
@@ -132,7 +132,7 @@ func TestBatch(t *testing.T) {
 		results := make(chan string, len(items)+1)
 
 		options := batch.Options[string]{
-			BatchSize: batchSize,
+			BatchFlushSize: batchSize,
 			FlushFunc: func(_ context.Context, _ int, items []string) error {
 				assert.Greater(t, len(items), 0)
 				for i := range items {
@@ -162,7 +162,7 @@ func TestBatch(t *testing.T) {
 
 		options := batch.Options[string]{
 			BatchFlushInterval: 100 * time.Millisecond,
-			BatchSize:          100,
+			BatchFlushSize:     100,
 			FlushFunc: func(_ context.Context, _ int, items []string) error {
 				for i := range items {
 					results <- items[i]
@@ -207,7 +207,7 @@ func TestBatch(t *testing.T) {
 
 		options := batch.Options[string]{
 			BatchFlushInterval: 1 * time.Second,
-			BatchSize:          batchSize,
+			BatchFlushSize:     batchSize,
 			FlushFunc: func(_ context.Context, _ int, items []string) error {
 				assert.Greater(t, len(items), 0)
 				for i := range items {
@@ -242,7 +242,7 @@ func TestBatch(t *testing.T) {
 
 	t.Run("Flush error", func(t *testing.T) {
 		options := batch.Options[string]{
-			BatchSize: 1,
+			BatchFlushSize: 1,
 			FlushFunc: func(_ context.Context, _ int, _ []string) error {
 				return context.Canceled
 			},
@@ -265,7 +265,7 @@ func TestBatch(t *testing.T) {
 
 	t.Run("Put context timeout", func(t *testing.T) {
 		options := batch.Options[string]{
-			BatchSize: 1,
+			BatchFlushSize: 1,
 			FlushFunc: func(_ context.Context, _ int, _ []string) error {
 				// sleep function ensures that all requests below are received and
 				// their context able timeout before the 1-st data flush is complete
@@ -316,8 +316,8 @@ func TestBatch(t *testing.T) {
 
 	t.Run("Flush context timeout", func(t *testing.T) {
 		options := batch.Options[string]{
-			BatchTimeout: 100 * time.Millisecond,
-			BatchSize:    1,
+			BatchTimeout:   100 * time.Millisecond,
+			BatchFlushSize: 1,
 			FlushFunc: func(ctx context.Context, _ int, _ []string) error {
 				ticker := time.NewTicker(200 * time.Millisecond)
 				defer ticker.Stop()
@@ -352,7 +352,7 @@ func TestBatch(t *testing.T) {
 		results := make(chan string, len(items)+1)
 
 		options := batch.Options[string]{
-			BatchSize: 2,
+			BatchFlushSize: 2,
 			FlushFunc: func(_ context.Context, _ int, items []string) error {
 				for i := range items {
 					results <- items[i]
@@ -394,7 +394,7 @@ func TestBatch(t *testing.T) {
 		batchNumber := 0
 
 		options := batch.Options[string]{
-			BatchSize: 2,
+			BatchFlushSize: 2,
 			FlushFunc: func(_ context.Context, _ int, _ []string) error {
 				batchNumber++
 				if batchNumber == 2 {

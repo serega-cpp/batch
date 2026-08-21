@@ -22,7 +22,7 @@ import (
 type Options[ItemType any] struct {
 	BatchTimeout       time.Duration // timeout for the buffer collection & flushing steps, default 1s
 	BatchFlushInterval time.Duration // default 100ms
-	BatchSize          int           // default 1000
+	BatchFlushSize     int           // default 1000
 	FlushThreadsCount  int           // default 1
 
 	FlushFunc func(ctx context.Context, thread int, items []ItemType) error // do nothing by default
@@ -35,8 +35,8 @@ func (o Options[ItemType]) withDefaults() Options[ItemType] {
 	if o.BatchFlushInterval == 0 {
 		o.BatchFlushInterval = 100 * time.Millisecond
 	}
-	if o.BatchSize == 0 {
-		o.BatchSize = 1000
+	if o.BatchFlushSize == 0 {
+		o.BatchFlushSize = 1000
 	}
 	if o.FlushThreadsCount == 0 {
 		o.FlushThreadsCount = 1
@@ -72,7 +72,7 @@ func New[ItemType any](options Options[ItemType]) *Batch[ItemType] {
 		options:         options.withDefaults(),
 	}
 	b.operationsBatchPool.New = func() any {
-		return newOperationsBatch[ItemType](b.options.BatchSize)
+		return newOperationsBatch[ItemType](b.options.BatchFlushSize)
 	}
 	b.metrics = newMetrics(b.options.FlushThreadsCount)
 
@@ -131,7 +131,7 @@ func (b *Batch[ItemType]) PutsMuch(
 	splitBy int,
 ) []ItemsSegment {
 	if splitBy == 0 {
-		splitBy = b.options.BatchSize
+		splitBy = b.options.BatchFlushSize
 	}
 	ctx := ctxInitial
 	var segments []ItemsSegment
@@ -197,7 +197,7 @@ func (b *Batch[ItemType]) collector() {
 			}
 			// In case of expected batch overflow, if there are already
 			// enough items in the batch, we will send it to writer immediately
-			if len(ob.items)+len(op.items) > b.options.BatchSize && len(ob.items) > len(op.items) {
+			if len(ob.items)+len(op.items) > b.options.BatchFlushSize && len(ob.items) > len(op.items) {
 				b.toWriterChan <- ob
 				ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
 			}
@@ -209,7 +209,7 @@ func (b *Batch[ItemType]) collector() {
 		case <-ticker.C:
 			flush = len(ob.items) > 0
 		}
-		if flush || len(ob.items) >= b.options.BatchSize {
+		if flush || len(ob.items) >= b.options.BatchFlushSize {
 			b.toWriterChan <- ob
 			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
 			ticker.Reset(b.options.BatchFlushInterval) // re-sync the timer flush
