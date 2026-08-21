@@ -212,6 +212,7 @@ func (b *Batch[ItemType]) collector() {
 		if flush || len(ob.items) >= b.options.BatchSize {
 			b.toWriterChan <- ob
 			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
+			ticker.Reset(b.options.BatchFlushInterval) // re-sync the timer flush
 		}
 		if done {
 			break

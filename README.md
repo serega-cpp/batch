@@ -42,8 +42,8 @@ db := database.New(..., DatabaseConnCount)
 options := batch.Options[Item]{
   BatchTimeout:       time.Second,
   BatchFlushInterval: 100 * time.Millisecond,
-  BatchSize:          DatabaseBatchSize, // default 1000
-  FlushThreadsCount:  DatabaseConnCount, // default 1
+  BatchSize:          DatabaseBatchSize,
+  FlushThreadsCount:  DatabaseConnCount,
   FlushFunc: func(ctx context.Context, thread int, items []Item) error {
     return db.Conns[thread].Insert(ctx, items)
   },
@@ -52,7 +52,6 @@ options := batch.Options[Item]{
 b := batch.New[Item](options)
 defer b.Close()
 
-// and use it in a request handler
 err := b.Put(ctx, item)
 ```
 
