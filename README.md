@@ -1,5 +1,5 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/serega-cpp/batch.svg)](https://pkg.go.dev/github.com/serega-cpp/batch)
-[![Go Report Card](https://goreportcard.com/badge/github.com/serega-cpp/batch)](https://goreportcard.com/report/github.com/serega-cpp/batch)
+[![Lint](https://github.com/serega-cpp/batch/actions/workflows/lint.yaml/badge.svg)](https://github.com/serega-cpp/batch/actions/workflows/lint.yaml)
 [![Go Build](https://github.com/serega-cpp/batch/actions/workflows/build.yaml/badge.svg)](https://github.com/serega-cpp/batch/actions/workflows/build.yaml)
 [![codecov](https://codecov.io/gh/serega-cpp/batch/branch/master/graph/badge.svg)](https://codecov.io/gh/serega-cpp/batch)
 
