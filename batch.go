@@ -119,21 +119,17 @@ func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 // PutsMuch allows you to process huge data sets that exceed the buffer size
 // by splitting them into smaller segments using the splitBy parameter. If you
 // pass 0, the exact batch size will be used. The function transmits segments
-// sequentially one after another using Puts function. ctxInitial is used to add
-// the first segment to the buffer, and ctxCompletion is used until all remaining
-// segments are added. It is expected that the latter will be set to a longer
-// timeout to ensure completion of the entire operation. To force cancellation
-// of an operation, both contexts should be canceled.
+// sequentially one after another using Puts function. It returns a slice with
+// the result status for each segment until an error occurs or all segments
+// have been processed.
 func (b *Batch[ItemType]) PutsMuch(
-	ctxInitial context.Context,
-	ctxCompletion context.Context,
+	ctx context.Context,
 	items []ItemType,
 	splitBy int,
 ) []ItemsSegment {
 	if splitBy == 0 {
 		splitBy = b.options.BatchFlushSize
 	}
-	ctx := ctxInitial
 	var segments []ItemsSegment
 	for i := 0; i < len(items); i += splitBy {
 		end := min(i+splitBy, len(items))
@@ -146,7 +142,6 @@ func (b *Batch[ItemType]) PutsMuch(
 		if err != nil {
 			break
 		}
-		ctx = ctxCompletion
 	}
 	return segments
 }
@@ -229,9 +224,9 @@ func (b *Batch[ItemType]) writer(thread int) {
 		if err != nil {
 			atomic.AddInt64(&b.metrics.ServedWithErrCount, int64(len(ob.items)))
 		}
-		for _, ch := range ob.results {
-			ch <- err
-			close(ch)
+		for _, result := range ob.results {
+			result <- err
+			close(result)
 		}
 		b.operationsBatchPool.Put(ob.reset())
 	}
