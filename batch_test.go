@@ -365,7 +365,7 @@ func TestBatch(t *testing.T) {
 		defer bat.Close()
 
 		pr := bat.PutsMuch(ctx, items, 0)
-		require.Equal(t, []batch.ItemsSegment{
+		require.Equal(t, []batch.SegmentStatus{
 			{
 				Start: 0,
 				End:   2,
@@ -408,7 +408,7 @@ func TestBatch(t *testing.T) {
 		defer bat.Close()
 
 		pr := bat.PutsMuch(ctx, items, 0)
-		require.Equal(t, []batch.ItemsSegment{
+		require.Equal(t, []batch.SegmentStatus{
 			{
 				Start: 0,
 				End:   2,

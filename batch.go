@@ -120,21 +120,22 @@ func (b *Batch[ItemType]) Puts(ctx context.Context, items []ItemType) error {
 // by splitting them into smaller segments using the splitBy parameter. If you
 // pass 0, the exact batch size will be used. The function transmits segments
 // sequentially one after another using Puts function. It returns a slice with
-// the result status for each segment until an error occurs or all segments
-// have been processed.
+// the result status for each segment until all segments have been processed or
+// an error occurs (in the latter case, the length of the slice is less than
+// the number of segments).
 func (b *Batch[ItemType]) PutsMuch(
 	ctx context.Context,
 	items []ItemType,
 	splitBy int,
-) []ItemsSegment {
+) []SegmentStatus {
 	if splitBy == 0 {
 		splitBy = b.options.BatchFlushSize
 	}
-	var segments []ItemsSegment
+	var statuses []SegmentStatus
 	for i := 0; i < len(items); i += splitBy {
 		end := min(i+splitBy, len(items))
 		err := b.Puts(ctx, items[i:end])
-		segments = append(segments, ItemsSegment{
+		statuses = append(statuses, SegmentStatus{
 			Start: i,
 			End:   end,
 			Err:   err,
@@ -143,7 +144,7 @@ func (b *Batch[ItemType]) PutsMuch(
 			break
 		}
 	}
-	return segments
+	return statuses
 }
 
 // Metrics returns the actual snapshot of the metrics state.
@@ -271,9 +272,9 @@ func (ob *operationsBatch[ItemType]) append(op *operation[ItemType]) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// ItemsSegment contains information about an items
+// SegmentStatus contains information about an items
 // segment, including the result of its processing.
-type ItemsSegment struct {
+type SegmentStatus struct {
 	Start int   // start of the segment in the items slice
 	End   int   // end of the segment in the items slice
 	Err   error // segment processing error (if any)
