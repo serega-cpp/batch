@@ -12,6 +12,8 @@ import (
 	"github.com/serega-cpp/batch"
 )
 
+const FlushInterval = 100 * time.Millisecond
+
 func TestBatch(t *testing.T) {
 	t.Run("Default options", func(t *testing.T) {
 		ctx := context.Background()
@@ -32,8 +34,9 @@ func TestBatch(t *testing.T) {
 		items := []string{"test1", "test2", "test3", "test4"}
 		flushesPerThreadCount := []int64{0, 0, 0, 0}
 		options := batch.Options[string]{
-			BatchFlushSize:    len(items),
-			FlushThreadsCount: threadsCount,
+			BatchFlushInterval: FlushInterval,
+			BatchFlushSize:     len(items),
+			FlushThreadsCount:  threadsCount,
 			FlushFunc: func(_ context.Context, thread int, _ []string) error {
 				flushesPerThreadCount[thread]++
 				return nil
@@ -55,11 +58,12 @@ func TestBatch(t *testing.T) {
 		wg.Wait()
 
 		require.Equal(t, batch.Metrics{
-			ServedCount:           int64(threadsCount * len(items)),
-			ServedWithErrCount:    0,
-			RejectedCount:         0,
-			FlushesCount:          int64(threadsCount),
-			FlushesPerThreadCount: flushesPerThreadCount,
+			ServedCount:            int64(threadsCount * len(items)),
+			ServedWithErrCount:     0,
+			RejectedCount:          0,
+			FlushesCount:           int64(threadsCount),
+			FlushesPerThreadCount:  flushesPerThreadCount,
+			CurrentFlushIntervalMs: FlushInterval.Milliseconds(),
 		}, bat.Metrics())
 	})
 
@@ -242,7 +246,8 @@ func TestBatch(t *testing.T) {
 
 	t.Run("Flush error", func(t *testing.T) {
 		options := batch.Options[string]{
-			BatchFlushSize: 1,
+			BatchFlushInterval: FlushInterval,
+			BatchFlushSize:     1,
 			FlushFunc: func(_ context.Context, _ int, _ []string) error {
 				return context.Canceled
 			},
@@ -255,17 +260,19 @@ func TestBatch(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 
 		require.Equal(t, batch.Metrics{
-			ServedCount:           1,
-			ServedWithErrCount:    1,
-			RejectedCount:         0,
-			FlushesCount:          1,
-			FlushesPerThreadCount: []int64{1},
+			ServedCount:            1,
+			ServedWithErrCount:     1,
+			RejectedCount:          0,
+			FlushesCount:           1,
+			FlushesPerThreadCount:  []int64{1},
+			CurrentFlushIntervalMs: FlushInterval.Milliseconds(),
 		}, bat.Metrics())
 	})
 
 	t.Run("Put context timeout", func(t *testing.T) {
 		options := batch.Options[string]{
-			BatchFlushSize: 1,
+			BatchFlushInterval: FlushInterval,
+			BatchFlushSize:     1,
 			FlushFunc: func(_ context.Context, _ int, _ []string) error {
 				// sleep function ensures that all requests below are received and
 				// their context able timeout before the 1-st data flush is complete
@@ -306,18 +313,20 @@ func TestBatch(t *testing.T) {
 		wg.Wait()
 
 		require.Equal(t, batch.Metrics{
-			ServedCount:           2,
-			ServedWithErrCount:    0,
-			RejectedCount:         1,
-			FlushesCount:          2,
-			FlushesPerThreadCount: []int64{2},
+			ServedCount:            2,
+			ServedWithErrCount:     0,
+			RejectedCount:          1,
+			FlushesCount:           2,
+			FlushesPerThreadCount:  []int64{2},
+			CurrentFlushIntervalMs: FlushInterval.Milliseconds(),
 		}, bat.Metrics())
 	})
 
 	t.Run("Flush context timeout", func(t *testing.T) {
 		options := batch.Options[string]{
-			BatchTimeout:   100 * time.Millisecond,
-			BatchFlushSize: 1,
+			BatchTimeout:       100 * time.Millisecond,
+			BatchFlushInterval: FlushInterval,
+			BatchFlushSize:     1,
 			FlushFunc: func(ctx context.Context, _ int, _ []string) error {
 				ticker := time.NewTicker(200 * time.Millisecond)
 				defer ticker.Stop()
@@ -337,11 +346,12 @@ func TestBatch(t *testing.T) {
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 
 		require.Equal(t, batch.Metrics{
-			ServedCount:           1,
-			ServedWithErrCount:    1,
-			RejectedCount:         0,
-			FlushesCount:          1,
-			FlushesPerThreadCount: []int64{1},
+			ServedCount:            1,
+			ServedWithErrCount:     1,
+			RejectedCount:          0,
+			FlushesCount:           1,
+			FlushesPerThreadCount:  []int64{1},
+			CurrentFlushIntervalMs: FlushInterval.Milliseconds(),
 		}, bat.Metrics())
 	})
 
@@ -420,6 +430,98 @@ func TestBatch(t *testing.T) {
 			},
 		}, pr)
 	})
+}
+
+func TestAdaptiveFlushInterval(t *testing.T) {
+	// adaptive timeout range: 300 .. 50, so the
+	// sequence is: 300 <-> 150 <-> 75 <-> 50.
+	client := batch.New(batch.Options[empty]{
+		BatchTimeout:          1 * time.Second,
+		BatchFlushInterval:    300 * time.Millisecond,
+		BatchMinFlushInterval: 50 * time.Millisecond,
+		FlushThreadsCount:     1,
+		FlushFunc: func(_ context.Context, _ int, items []empty) error {
+			return nil
+		},
+	})
+	defer client.Close()
+
+	ctx := context.Background()
+
+	workCh1 := make(chan empty)
+	workCh2 := make(chan empty)
+	workDoneCh := make(chan int)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for range workCh1 {
+			err := client.Put(ctx, empty{})
+			require.NoError(t, err)
+			workDoneCh <- 1
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range workCh2 {
+			err := client.Put(ctx, empty{})
+			require.NoError(t, err)
+			workDoneCh <- 2
+		}
+	}()
+
+	workCh1 <- empty{}
+	time.Sleep(100 * time.Millisecond) // the last item goes to [25;50]%
+	workCh2 <- empty{}
+	<-workDoneCh
+	<-workDoneCh
+	// expect the timeout to remain the same
+	require.Equal(t, int64(300), client.Metrics().CurrentFlushIntervalMs)
+
+	workCh1 <- empty{}
+	<-workDoneCh
+	// expect the timeout to decrease
+	require.Equal(t, int64(150), client.Metrics().CurrentFlushIntervalMs)
+
+	workCh1 <- empty{}
+	<-workDoneCh
+	// expect the timeout to decrease
+	require.Equal(t, int64(75), client.Metrics().CurrentFlushIntervalMs)
+
+	workCh1 <- empty{}
+	<-workDoneCh
+	// expect the timeout to decrease and be truncated to a min
+	require.Equal(t, int64(50), client.Metrics().CurrentFlushIntervalMs)
+
+	workCh1 <- empty{}
+	time.Sleep(30 * time.Millisecond) // the last item goes to [50;100]%
+	workCh2 <- empty{}
+	<-workDoneCh
+	<-workDoneCh
+	// expect the timeout to increase
+	require.Equal(t, int64(100), client.Metrics().CurrentFlushIntervalMs)
+
+	workCh1 <- empty{}
+	time.Sleep(60 * time.Millisecond) // the last item goes to [50;100]%
+	workCh2 <- empty{}
+	<-workDoneCh
+	<-workDoneCh
+	// expect the timeout to increase
+	require.Equal(t, int64(200), client.Metrics().CurrentFlushIntervalMs)
+
+	workCh1 <- empty{}
+	time.Sleep(120 * time.Millisecond) // the last item goes to [50;100]%
+	workCh2 <- empty{}
+	<-workDoneCh
+	<-workDoneCh
+	// expect the timeout to increase and be truncated to a max
+	require.Equal(t, int64(300), client.Metrics().CurrentFlushIntervalMs)
+
+	close(workCh1)
+	close(workCh2)
+	wg.Wait()
 }
 
 type empty struct{}
