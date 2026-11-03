@@ -20,10 +20,11 @@ import (
 // Options contains the configuration of the batch
 // instance (each parameter has a default value).
 type Options[ItemType any] struct {
-	BatchTimeout       time.Duration // timeout for the buffer collection & flushing steps, default 1s
-	BatchFlushInterval time.Duration // default 100ms
-	BatchFlushSize     int           // default 1000
-	FlushThreadsCount  int           // default 1
+	BatchTimeout          time.Duration // timeout for the buffer collection & flushing steps, default 1s
+	BatchFlushInterval    time.Duration // default 100ms
+	BatchMinFlushInterval time.Duration // default the same as BatchFlushInterval
+	BatchFlushSize        int           // default 1000
+	FlushThreadsCount     int           // default 1
 
 	FlushFunc func(ctx context.Context, thread int, items []ItemType) error // do nothing by default
 }
@@ -34,6 +35,9 @@ func (o Options[ItemType]) withDefaults() Options[ItemType] {
 	}
 	if o.BatchFlushInterval == 0 {
 		o.BatchFlushInterval = 100 * time.Millisecond
+	}
+	if o.BatchMinFlushInterval == 0 || o.BatchMinFlushInterval > o.BatchFlushInterval {
+		o.BatchMinFlushInterval = o.BatchFlushInterval
 	}
 	if o.BatchFlushSize == 0 {
 		o.BatchFlushSize = 1000
@@ -47,6 +51,16 @@ func (o Options[ItemType]) withDefaults() Options[ItemType] {
 		}
 	}
 	return o
+}
+
+func (o Options[ItemType]) nextBatchFlushInterval(current time.Duration, used time.Duration) time.Duration {
+	if used < current/4 {
+		return max(o.BatchMinFlushInterval, current/2)
+	}
+	if used > current/2 {
+		return min(o.BatchFlushInterval, current*2)
+	}
+	return current
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -156,11 +170,12 @@ func (b *Batch[ItemType]) Metrics() Metrics {
 		flushesCount += flushesPerThreadCount[i]
 	}
 	return Metrics{
-		ServedCount:           atomic.LoadInt64(&b.metrics.ServedCount),
-		ServedWithErrCount:    atomic.LoadInt64(&b.metrics.ServedWithErrCount),
-		RejectedCount:         atomic.LoadInt64(&b.metrics.RejectedCount),
-		FlushesCount:          flushesCount,
-		FlushesPerThreadCount: flushesPerThreadCount,
+		ServedCount:            atomic.LoadInt64(&b.metrics.ServedCount),
+		ServedWithErrCount:     atomic.LoadInt64(&b.metrics.ServedWithErrCount),
+		RejectedCount:          atomic.LoadInt64(&b.metrics.RejectedCount),
+		FlushesCount:           flushesCount,
+		FlushesPerThreadCount:  flushesPerThreadCount,
+		CurrentFlushIntervalMs: atomic.LoadInt64(&b.metrics.CurrentFlushIntervalMs),
 	}
 }
 
@@ -178,7 +193,15 @@ func (b *Batch[ItemType]) collector() {
 
 	ob := b.operationsBatchPool.Get().(*operationsBatch[ItemType])
 
-	ticker := time.NewTicker(b.options.BatchFlushInterval)
+	// Register the time of the first and the last operations in
+	// the batch ready to flush, used by adaptive flush interval
+	var first_op_time time.Time
+	var last_op_time time.Time
+
+	adaptiveFlushInterval := b.options.BatchFlushInterval
+	atomic.StoreInt64(&b.metrics.CurrentFlushIntervalMs, adaptiveFlushInterval.Milliseconds())
+
+	ticker := time.NewTicker(adaptiveFlushInterval)
 	defer ticker.Stop()
 
 	for {
@@ -200,15 +223,19 @@ func (b *Batch[ItemType]) collector() {
 			// Set a batch timeout when the first item is added to the batch
 			if len(ob.items) == 0 {
 				ob.initCtx(b.options.BatchTimeout)
+				first_op_time = time.Now()
 			}
 			ob.append(op)
+			last_op_time = time.Now()
 		case <-ticker.C:
 			flush = len(ob.items) > 0
 		}
 		if flush || len(ob.items) >= b.options.BatchFlushSize {
+			adaptiveFlushInterval = b.options.nextBatchFlushInterval(adaptiveFlushInterval, last_op_time.Sub(first_op_time))
+			atomic.StoreInt64(&b.metrics.CurrentFlushIntervalMs, adaptiveFlushInterval.Milliseconds())
 			b.toWriterChan <- ob
 			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
-			ticker.Reset(b.options.BatchFlushInterval) // re-sync the timer flush
+			ticker.Reset(adaptiveFlushInterval) // re-sync the timer flush
 		}
 		if done {
 			break
