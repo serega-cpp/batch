@@ -25,7 +25,7 @@ There are two different timeouts to control the execution time of batch operatio
 - The request timeout (configured per call in `Put()` / `Puts()`) applies to the operation of adding an item to the buffer. Once the item has been successfully appended to the buffer, it can no longer be cancelled through this timeout.
 - The batch processing timeout (configured via `Options.BatchTimeout`) applies to buffer collection and flush operations. It is also passed to the user-defined `FlushFunc` function, which is responsible for handling the timeout through the provided context.
 
-To improve performance in scenarios with a "very small number of clients," an adaptive timeout mode has been introduced. In this mode, the batch flush timeout can be dynamically reduced if the system thinks that all clients have already sent their data and are awaiting results. To enable this mode, set the `Options.BatchMinFlushInterval` parameter.
+To improve performance in scenarios with a "very small number of clients" an adaptive timeout mode has been introduced. In this mode, the batch flush timeout can be dynamically reduced if the system thinks that all clients have already sent their data and are awaiting results. To enable this mode, set the `Options.BatchMinFlushInterval` parameter. However, do not set it too low, try to keep it between `Options.BatchFlushInterval` and the average flush time.
 
 #### Usage sample:
 
