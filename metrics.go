@@ -9,7 +9,7 @@ type Metrics struct {
 	FlushesCount          int64   // total number of flushes
 	FlushesPerThreadCount []int64 // total number of flushes, distributed across the flush threads
 
-	CurrentFlushIntervalMs int64
+	FlushIntervalMs int64 // the adaptive flush interval value at the moment, millisec
 }
 
 func newMetrics(threads int) Metrics {

@@ -58,12 +58,12 @@ func TestBatch(t *testing.T) {
 		wg.Wait()
 
 		require.Equal(t, batch.Metrics{
-			ServedCount:            int64(threadsCount * len(items)),
-			ServedWithErrCount:     0,
-			RejectedCount:          0,
-			FlushesCount:           int64(threadsCount),
-			FlushesPerThreadCount:  flushesPerThreadCount,
-			CurrentFlushIntervalMs: FlushInterval.Milliseconds(),
+			ServedCount:           int64(threadsCount * len(items)),
+			ServedWithErrCount:    0,
+			RejectedCount:         0,
+			FlushesCount:          int64(threadsCount),
+			FlushesPerThreadCount: flushesPerThreadCount,
+			FlushIntervalMs:       FlushInterval.Milliseconds(),
 		}, bat.Metrics())
 	})
 
@@ -260,12 +260,12 @@ func TestBatch(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 
 		require.Equal(t, batch.Metrics{
-			ServedCount:            1,
-			ServedWithErrCount:     1,
-			RejectedCount:          0,
-			FlushesCount:           1,
-			FlushesPerThreadCount:  []int64{1},
-			CurrentFlushIntervalMs: FlushInterval.Milliseconds(),
+			ServedCount:           1,
+			ServedWithErrCount:    1,
+			RejectedCount:         0,
+			FlushesCount:          1,
+			FlushesPerThreadCount: []int64{1},
+			FlushIntervalMs:       FlushInterval.Milliseconds(),
 		}, bat.Metrics())
 	})
 
@@ -313,12 +313,12 @@ func TestBatch(t *testing.T) {
 		wg.Wait()
 
 		require.Equal(t, batch.Metrics{
-			ServedCount:            2,
-			ServedWithErrCount:     0,
-			RejectedCount:          1,
-			FlushesCount:           2,
-			FlushesPerThreadCount:  []int64{2},
-			CurrentFlushIntervalMs: FlushInterval.Milliseconds(),
+			ServedCount:           2,
+			ServedWithErrCount:    0,
+			RejectedCount:         1,
+			FlushesCount:          2,
+			FlushesPerThreadCount: []int64{2},
+			FlushIntervalMs:       FlushInterval.Milliseconds(),
 		}, bat.Metrics())
 	})
 
@@ -346,12 +346,12 @@ func TestBatch(t *testing.T) {
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 
 		require.Equal(t, batch.Metrics{
-			ServedCount:            1,
-			ServedWithErrCount:     1,
-			RejectedCount:          0,
-			FlushesCount:           1,
-			FlushesPerThreadCount:  []int64{1},
-			CurrentFlushIntervalMs: FlushInterval.Milliseconds(),
+			ServedCount:           1,
+			ServedWithErrCount:    1,
+			RejectedCount:         0,
+			FlushesCount:          1,
+			FlushesPerThreadCount: []int64{1},
+			FlushIntervalMs:       FlushInterval.Milliseconds(),
 		}, bat.Metrics())
 	})
 
@@ -478,22 +478,22 @@ func TestAdaptiveFlushInterval(t *testing.T) {
 	<-workDoneCh
 	<-workDoneCh
 	// expect the timeout to remain the same
-	require.Equal(t, int64(300), client.Metrics().CurrentFlushIntervalMs)
+	require.Equal(t, int64(300), client.Metrics().FlushIntervalMs)
 
 	workCh1 <- empty{}
 	<-workDoneCh
 	// expect the timeout to decrease
-	require.Equal(t, int64(150), client.Metrics().CurrentFlushIntervalMs)
+	require.Equal(t, int64(150), client.Metrics().FlushIntervalMs)
 
 	workCh1 <- empty{}
 	<-workDoneCh
 	// expect the timeout to decrease
-	require.Equal(t, int64(75), client.Metrics().CurrentFlushIntervalMs)
+	require.Equal(t, int64(75), client.Metrics().FlushIntervalMs)
 
 	workCh1 <- empty{}
 	<-workDoneCh
 	// expect the timeout to decrease and be truncated to a min
-	require.Equal(t, int64(50), client.Metrics().CurrentFlushIntervalMs)
+	require.Equal(t, int64(50), client.Metrics().FlushIntervalMs)
 
 	workCh1 <- empty{}
 	time.Sleep(30 * time.Millisecond) // the last item goes to [50;100]%
@@ -501,7 +501,7 @@ func TestAdaptiveFlushInterval(t *testing.T) {
 	<-workDoneCh
 	<-workDoneCh
 	// expect the timeout to increase
-	require.Equal(t, int64(100), client.Metrics().CurrentFlushIntervalMs)
+	require.Equal(t, int64(100), client.Metrics().FlushIntervalMs)
 
 	workCh1 <- empty{}
 	time.Sleep(60 * time.Millisecond) // the last item goes to [50;100]%
@@ -509,7 +509,7 @@ func TestAdaptiveFlushInterval(t *testing.T) {
 	<-workDoneCh
 	<-workDoneCh
 	// expect the timeout to increase
-	require.Equal(t, int64(200), client.Metrics().CurrentFlushIntervalMs)
+	require.Equal(t, int64(200), client.Metrics().FlushIntervalMs)
 
 	workCh1 <- empty{}
 	time.Sleep(120 * time.Millisecond) // the last item goes to [50;100]%
@@ -517,7 +517,7 @@ func TestAdaptiveFlushInterval(t *testing.T) {
 	<-workDoneCh
 	<-workDoneCh
 	// expect the timeout to increase and be truncated to a max
-	require.Equal(t, int64(300), client.Metrics().CurrentFlushIntervalMs)
+	require.Equal(t, int64(300), client.Metrics().FlushIntervalMs)
 
 	close(workCh1)
 	close(workCh2)

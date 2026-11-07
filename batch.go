@@ -170,12 +170,12 @@ func (b *Batch[ItemType]) Metrics() Metrics {
 		flushesCount += flushesPerThreadCount[i]
 	}
 	return Metrics{
-		ServedCount:            atomic.LoadInt64(&b.metrics.ServedCount),
-		ServedWithErrCount:     atomic.LoadInt64(&b.metrics.ServedWithErrCount),
-		RejectedCount:          atomic.LoadInt64(&b.metrics.RejectedCount),
-		FlushesCount:           flushesCount,
-		FlushesPerThreadCount:  flushesPerThreadCount,
-		CurrentFlushIntervalMs: atomic.LoadInt64(&b.metrics.CurrentFlushIntervalMs),
+		ServedCount:           atomic.LoadInt64(&b.metrics.ServedCount),
+		ServedWithErrCount:    atomic.LoadInt64(&b.metrics.ServedWithErrCount),
+		RejectedCount:         atomic.LoadInt64(&b.metrics.RejectedCount),
+		FlushesCount:          flushesCount,
+		FlushesPerThreadCount: flushesPerThreadCount,
+		FlushIntervalMs:       atomic.LoadInt64(&b.metrics.FlushIntervalMs),
 	}
 }
 
@@ -199,7 +199,7 @@ func (b *Batch[ItemType]) collector() {
 	var last_op_time time.Time
 
 	adaptiveFlushInterval := b.options.BatchFlushInterval
-	atomic.StoreInt64(&b.metrics.CurrentFlushIntervalMs, adaptiveFlushInterval.Milliseconds())
+	atomic.StoreInt64(&b.metrics.FlushIntervalMs, adaptiveFlushInterval.Milliseconds())
 
 	ticker := time.NewTicker(adaptiveFlushInterval)
 	defer ticker.Stop()
@@ -232,7 +232,7 @@ func (b *Batch[ItemType]) collector() {
 		}
 		if flush || len(ob.items) >= b.options.BatchFlushSize {
 			adaptiveFlushInterval = b.options.nextBatchFlushInterval(adaptiveFlushInterval, last_op_time.Sub(first_op_time))
-			atomic.StoreInt64(&b.metrics.CurrentFlushIntervalMs, adaptiveFlushInterval.Milliseconds())
+			atomic.StoreInt64(&b.metrics.FlushIntervalMs, adaptiveFlushInterval.Milliseconds())
 			b.toWriterChan <- ob
 			ob = b.operationsBatchPool.Get().(*operationsBatch[ItemType])
 			ticker.Reset(adaptiveFlushInterval) // re-sync the timer flush
